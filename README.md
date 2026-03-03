@@ -1,19 +1,25 @@
 # Agentic AI Workflow System
 
-Phase 1 implementation of the core autonomous loop from the project markdown docs.
+Phase 2 implementation of the autonomous loop with a real tool layer.
 
-## Implemented in Phase 1
+## Implemented in Phase 2
 - Basic LangGraph workflow (`planner -> executor -> verifier -> loop/end`)
 - Planner node
 - Executor node
 - Verifier node
 - Agent memory state management
+- Tool layer:
+  - web search
+  - python execution
+  - file reader
+  - calculator
 
 ## Files
 - `src/agentic_workflow/state.py`
 - `src/agentic_workflow/planner.py`
 - `src/agentic_workflow/executor.py`
 - `src/agentic_workflow/verifier.py`
+- `src/agentic_workflow/tools.py`
 - `src/agentic_workflow/workflow.py`
 - `src/agentic_workflow/api.py`
 
@@ -33,11 +39,12 @@ Example payload:
 ```json
 {
   "goal": "Analyze this startup idea and suggest initial competitors",
-  "max_iterations": 8
+  "max_iterations": 8,
+  "file_root": "."
 }
 ```
 
 ## Notes
-- This is Phase 1 only.
-- External tools (web search, Python execution, file reader, calculator) are deferred to Phase 2.
-- LLM planning is deferred to Phase 3; planner is intentionally deterministic for now.
+- This includes the Phase 2 tool layer with structured tool outputs.
+- Planner is deterministic and keyword-based for now.
+- LLM planner integration remains Phase 3.

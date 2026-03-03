@@ -1,4 +1,4 @@
-"""Phase 1 Agentic AI Workflow package."""
+"""Agentic workflow package exposing the main run entry point."""
 
 from .workflow import run_agent_goal
 

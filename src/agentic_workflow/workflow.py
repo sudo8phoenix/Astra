@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-import importlib
+"""LangGraph workflow wiring for planner, executor, and verifier nodes."""
+
 from typing import Any, Literal
+
+from langgraph.graph import END, START, StateGraph
 
 from .executor import execute_plan
 from .planner import planner
@@ -10,12 +13,21 @@ from .verifier import verify_goal
 
 
 def planner_node(state: AgentState) -> AgentState:
+    """Generate the next plan from the current goal and accumulated memory."""
+
     state["plan"] = planner(goal=state["goal"], memory=state["memory"])
     return state
 
 
 def executor_node(state: AgentState) -> AgentState:
-    result = execute_plan(plan=state["plan"], goal=state["goal"], memory=state["memory"])
+    """Execute the current plan and append structured result into memory."""
+
+    result = execute_plan(
+        plan=state["plan"],
+        goal=state["goal"],
+        memory=state["memory"],
+        file_root=state["file_root"],
+    )
     state["tool_result"] = result
     state["memory"].append({
         "iteration": state["iteration"],
@@ -26,6 +38,8 @@ def executor_node(state: AgentState) -> AgentState:
 
 
 def verifier_node(state: AgentState) -> AgentState:
+    """Update completion flags and iteration counters from verifier output."""
+
     verdict = verify_goal(
         goal=state["goal"],
         memory=state["memory"],
@@ -40,16 +54,15 @@ def verifier_node(state: AgentState) -> AgentState:
 
 
 def route_after_verifier(state: AgentState) -> Literal["planner", "end"]:
+    """Route to END when complete/failed, otherwise continue the loop."""
+
     if state["goal_achieved"] or state["status"] in {"complete", "failed"}:
         return "end"
     return "planner"
 
 
 def build_workflow():
-    graph_module = importlib.import_module("langgraph.graph")
-    END = getattr(graph_module, "END")
-    START = getattr(graph_module, "START")
-    StateGraph = getattr(graph_module, "StateGraph")
+    """Construct and compile the LangGraph state machine for the agent loop."""
 
     graph = StateGraph(AgentState)
     graph.add_node("planner", planner_node)
@@ -64,7 +77,9 @@ def build_workflow():
     return graph.compile()
 
 
-def run_agent_goal(goal: str, max_iterations: int = 8) -> dict[str, Any]:
+def run_agent_goal(goal: str, max_iterations: int = 8, file_root: str = ".") -> dict[str, Any]:
+    """Run the compiled workflow until completion or iteration limit is reached."""
+
     app = build_workflow()
     initial_state: AgentState = {
         "goal": goal,
@@ -76,6 +91,7 @@ def run_agent_goal(goal: str, max_iterations: int = 8) -> dict[str, Any]:
         "max_iterations": max_iterations,
         "goal_achieved": False,
         "final_answer": "",
+        "file_root": file_root,
     }
     final_state = app.invoke(initial_state)
     return {
