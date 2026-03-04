@@ -294,7 +294,7 @@
             <button id="send-btn" type="submit">Send</button>
           </div>
           <div class="row">
-            <input id="max-iterations" class="small" type="number" min="1" max="20" value="8" />
+            <input id="max-iterations" class="small" type="number" min="1" max="50" value="8" />
             <input id="file-root" type="text" value="." />
           </div>
           <div id="status" class="status">Ready</div>
@@ -320,6 +320,85 @@
       let currentEventSource = null;
       let traceCounter = 0;
       let sessionId = localStorage.getItem("agentic_session_id") || "";
+      let streamCompleted = false;
+      let streamReceivedEvent = false;
+      const API_BASE_STORAGE_KEY = "agentic_api_base_url";
+
+      function isSandboxedPageContext() {
+        const protocol = String(window.location.protocol || "").toLowerCase();
+        return !(protocol === "http:" || protocol === "https:" || protocol === "file:");
+      }
+
+      function normalizeBaseUrl(url) {
+        return String(url || "")
+          .trim()
+          .replace(/\/+$/, "");
+      }
+
+      function buildApiBaseCandidates() {
+        const candidates = [];
+        const addCandidate = (value) => {
+          const normalized = normalizeBaseUrl(value);
+          if (!normalized || candidates.includes(normalized)) {
+            return;
+          }
+          candidates.push(normalized);
+        };
+
+        const queryBase = new URLSearchParams(window.location.search).get("api_base");
+        if (queryBase) {
+          addCandidate(queryBase);
+        }
+
+        addCandidate(localStorage.getItem(API_BASE_STORAGE_KEY) || "");
+
+        const protocol = window.location.protocol;
+        if (protocol === "http:" || protocol === "https:") {
+          addCandidate(window.location.origin);
+        }
+
+        addCandidate("http://127.0.0.1:8000");
+        addCandidate("http://localhost:8000");
+        addCandidate("http://127.0.0.1:8001");
+        addCandidate("http://localhost:8001");
+        addCandidate("http://127.0.0.1:8002");
+        addCandidate("http://localhost:8002");
+        addCandidate("http://127.0.0.1:8003");
+        addCandidate("http://localhost:8003");
+        addCandidate("http://127.0.0.1:8010");
+        addCandidate("http://localhost:8010");
+
+        return candidates;
+      }
+
+      async function probeApiBase(baseUrl) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1500);
+        try {
+          const response = await fetch(`${baseUrl}/health`, {
+            method: "GET",
+            mode: "cors",
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          return response.ok;
+        } catch {
+          return false;
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      async function resolveApiBaseUrl() {
+        const candidates = buildApiBaseCandidates();
+        for (const candidate of candidates) {
+          if (await probeApiBase(candidate)) {
+            localStorage.setItem(API_BASE_STORAGE_KEY, candidate);
+            return candidate;
+          }
+        }
+        return candidates[0] || "http://127.0.0.1:8000";
+      }
 
       function scrollToBottom(el) {
         el.scrollTop = el.scrollHeight;
@@ -424,36 +503,6 @@
           return;
         }
 
-        if (event.type === "tool_start") {
-          addTraceCard(
-            "Tool Start",
-            event.tool || "unknown",
-            `Iteration: ${event.iteration ?? "?"}`,
-            event.input || {}
-          );
-          return;
-        }
-
-        if (event.type === "tool_result") {
-          addTraceCard(
-            "Tool Result",
-            `${event.tool || "unknown"} (${event.status || "unknown"})`,
-            event.output_preview || "",
-            event.metadata || {}
-          );
-          return;
-        }
-
-        if (event.type === "verifier") {
-          addTraceCard(
-            "Verifier",
-            event.status || "unknown",
-            `confidence=${event.confidence ?? "n/a"} | goal_achieved=${event.goal_achieved ?? "n/a"}`,
-            event
-          );
-          return;
-        }
-
         if (event.type === "evaluation") {
           const evaluation = event.evaluation || {};
           addTraceCard(
@@ -473,6 +522,7 @@
           }
           const text = result.final_answer || event.reply || event.final_answer || "No final answer generated.";
           addBubble("assistant", text);
+          streamCompleted = true;
           statusEl.textContent = "Done";
           if (currentEventSource) {
             currentEventSource.close();
@@ -494,7 +544,7 @@
         }
       }
 
-      formEl.addEventListener("submit", (event) => {
+      formEl.addEventListener("submit", async (event) => {
         event.preventDefault();
 
         const message = messageInput.value.trim();
@@ -510,9 +560,12 @@
           currentEventSource = null;
         }
 
+        streamCompleted = false;
+        streamReceivedEvent = false;
+
         addBubble("user", message);
         resetForNextRun();
-        statusEl.textContent = "Running...";
+        statusEl.textContent = "Resolving API endpoint...";
         setBusy(true);
 
         const params = new URLSearchParams({
@@ -525,31 +578,79 @@
           params.set("session_id", sessionId);
         }
 
-        const streamUrl = `/chat/stream?${params.toString()}`;
-        currentEventSource = new EventSource(streamUrl);
+        const streamPath = `/chat/stream?${params.toString()}`;
+        const primaryBase = await resolveApiBaseUrl();
+        const fallbackBases = buildApiBaseCandidates().filter((base) => base !== primaryBase);
+        const triedBases = [];
 
-        currentEventSource.onmessage = (msg) => {
-          try {
-            const data = JSON.parse(msg.data);
-            handleStreamEvent(data);
-          } catch (err) {
-            addTraceCard("Error", "Event parsing failed", String(err), { raw: msg.data });
-          }
+        const connectStream = (baseUrl) => {
+          triedBases.push(baseUrl);
+          statusEl.textContent = `Running via ${baseUrl}...`;
+          const streamUrl = `${baseUrl}${streamPath}`;
+          currentEventSource = new EventSource(streamUrl);
+
+          currentEventSource.onmessage = (msg) => {
+            try {
+              const data = JSON.parse(msg.data);
+              streamReceivedEvent = true;
+              localStorage.setItem(API_BASE_STORAGE_KEY, baseUrl);
+              handleStreamEvent(data);
+            } catch (err) {
+              addTraceCard("Error", "Event parsing failed", String(err), { raw: msg.data });
+            }
+          };
+
+          currentEventSource.onerror = () => {
+            if (streamCompleted) {
+              return;
+            }
+
+            if (currentEventSource) {
+              currentEventSource.close();
+              currentEventSource = null;
+            }
+
+            if (!streamReceivedEvent && fallbackBases.length > 0) {
+              const nextBase = fallbackBases.shift();
+              statusEl.textContent = `Retrying via ${nextBase}...`;
+              connectStream(nextBase);
+              return;
+            }
+
+            if (!streamReceivedEvent) {
+              statusEl.textContent = "Connection failed (check API URL/port)";
+              addTraceCard("Error", "Connection failed", "No reachable API stream endpoint", {
+                tried_bases: triedBases,
+              });
+            } else {
+              statusEl.textContent = "Connection closed";
+            }
+            setBusy(false);
+          };
         };
 
-        currentEventSource.onerror = () => {
-          if (currentEventSource) {
-            currentEventSource.close();
-            currentEventSource = null;
-          }
-          statusEl.textContent = "Connection closed";
-          setBusy(false);
-        };
+        connectStream(primaryBase);
 
         messageInput.value = "";
       });
 
       statusEl.textContent = "Ready";
+
+      if (isSandboxedPageContext()) {
+        addTraceCard(
+          "Info",
+          "Restricted browser context",
+          "This preview cannot reach localhost APIs directly.",
+          {
+            current_protocol: window.location.protocol,
+            recommended_url: "http://127.0.0.1:8000/",
+          }
+        );
+        addBubble(
+          "system",
+          "Open this app in your regular browser at http://127.0.0.1:8000/ for local API streaming."
+        );
+      }
     </script>
   </body>
 </html>

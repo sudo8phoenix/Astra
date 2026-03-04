@@ -1,4 +1,4 @@
-# Agentic AI Workflow (Groq + 5 Agents)
+# Agentic AI Workflow (LangGraph + Groq)
 
 A production-style agentic workflow with:
 - **Planner Agent** (task decomposition)
@@ -7,23 +7,23 @@ A production-style agentic workflow with:
 - **Memory Agent** (session memory)
 - **Evaluator Agent** (final quality check)
 
-Includes a FastAPI backend, streaming chat endpoint, and a web chat UI showing a linear execution trace.
+Includes a FastAPI backend, streaming chat endpoint, and a web chat UI showing live graph execution traces.
 
 ## Features
 
 - Groq SDK integration (`groq` Python package)
+- LangGraph `StateGraph` orchestration with cyclic control flow
 - Tooling: `web_search`, `calculator`, `python_execute`, `file_reader`
 - General conversation + tool-driven tasks
-- Session memory retention with automatic pruning:
-  - Keeps at most **15 user messages** in memory
-  - Oldest user message is dropped when limit is exceeded
+- Built-in checkpointed memory via LangGraph `MemorySaver` (threaded by `session_id`)
+- Dynamic replanning when evaluator returns `retry`
 - SSE streaming for real-time plan/route/execution/evaluation events
 
 ## Project Structure
 
 - `agent_nodes.py` — all 5 agents + Groq client
 - `tools.py` — tool implementations and dispatch
-- `workflow.py` — orchestration engine
+- `workflow.py` — LangGraph state machine (`planner → router → executor → evaluator → finalize`)
 - `api_server.py` — FastAPI app (`/chat`, `/chat/stream`, `/health`, `/health/groq`)
 - `chat_ui.html` — frontend chat interface
 - `run_api.sh` — startup script (loads `.env`, auto-port handling)
@@ -40,6 +40,7 @@ Includes a FastAPI backend, streaming chat endpoint, and a web chat UI showing a
 python -m venv .venv
 source .venv/bin/activate
 pip install fastapi uvicorn groq
+pip install langgraph langchain langchain-core
 ```
 
 Create `.env` in repo root:
@@ -48,8 +49,8 @@ Create `.env` in repo root:
 GROQ_API_KEY=your_groq_key
 SERPAPI_API_KEY=your_serpapi_key
 
-HOST=127.0.0.1
-PORT=8003
+APP_HOST=127.0.0.1
+APP_PORT=8003
 
 PLANNER_MODEL=llama-3.3-70b-versatile
 ROUTER_MODEL=llama-3.1-8b-instant
@@ -98,11 +99,11 @@ Query params:
 - `file_root`
 - `session_id` (optional but recommended for memory continuity)
 
-Returns SSE events: `session`, `plan`, `route`, `execution`, `evaluation`, `final`.
+Returns SSE events: `session`, `plan`, `replan`, `route`, `execution`, `evaluation`, `final`, `error`.
 
 ## Session Memory
 
-- Memory is stored server-side per `session_id`
+- Memory is checkpointed in LangGraph per `session_id` (`thread_id`)
 - Frontend stores `session_id` in browser local storage
 - Name recall example:
   1. `my name is cyril`

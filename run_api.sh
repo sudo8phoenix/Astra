@@ -11,8 +11,8 @@ if [[ -f ".env" ]]; then
   set +a
 fi
 
-HOST="${HOST:-127.0.0.1}"
-START_PORT="${PORT:-8000}"
+HOST="${APP_HOST:-${HOST:-127.0.0.1}}"
+START_PORT="${APP_PORT:-${PORT:-8000}}"
 
 if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
   PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
