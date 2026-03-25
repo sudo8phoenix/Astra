@@ -1,0 +1,35 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+pydantic==2.10.6
+pydantic-settings==2.8.1
+
+# Database & ORM
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg2-binary==2.9.10
+
+# Cache
+redis==5.2.0
+
+# Agent & LLM
+langchain==0.3.11
+langchain-groq==0.2.2
+langgraph==0.3.11
+groq==0.9.0
+
+# External APIs
+google-auth-oauthlib==1.2.1
+google-auth-httplib2==0.2.0
+google-api-python-client==2.115.0
+python-dotenv==1.0.1
+
+# Authentication & Security
+pyjwt==2.8.0
+cryptography==41.0.7
+passlib[bcrypt]==1.7.4
+
+# Utilities
+python-multipart==0.0.6
+email-validator==2.1.1
+httpx==0.25.2
+pytz==2024.1

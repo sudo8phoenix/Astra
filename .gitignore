@@ -95,6 +95,7 @@ docker-compose.override.yml
 *.yaml
 *.sh
 SETUP_SCRIPTS/
+SETUP_SCRIPTS/seed_database.py
 
 # CI/CD
 .github/workflows/*.backup

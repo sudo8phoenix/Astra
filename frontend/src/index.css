@@ -1,0 +1,314 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Global Styles */
+* {
+  @apply transition-colors duration-200;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background-color: #0F172A;
+  color: #FFFFFF;
+  font-family: Inter, system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+/* Glassmorphism effect */
+.glass {
+  @apply bg-background-card backdrop-blur-md border border-white/10;
+}
+
+/* Glow effects */
+.glow {
+  @apply shadow-glow;
+}
+
+.glow-lg {
+  @apply shadow-glow-lg;
+}
+
+/* Gradient backgrounds */
+.gradient-primary {
+  background: linear-gradient(135deg, #6C63FF, #00D4FF);
+}
+
+.gradient-glow {
+  background: radial-gradient(circle, rgba(0, 212, 255, 0.4), transparent);
+}
+
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+
+/* Fade In Animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Typing Indicator Animation */
+@keyframes typing {
+  0% {
+    width: 0;
+  }
+  100% {
+    width: 16px;
+  }
+}
+
+.animate-typing {
+  animation: typing 0.7s steps(4, end) infinite;
+}
+
+/* Dots Animation for Typing Indicator */
+@keyframes typingDots {
+  0%,
+  20% {
+    content: '.';
+    width: 4px;
+  }
+  40% {
+    content: '..';
+    width: 8px;
+  }
+  60%,
+  100% {
+    content: '...';
+    width: 12px;
+  }
+}
+
+/* Pulse Animation */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Scale Pop Animation */
+@keyframes scalePop {
+  0% {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-scale-pop {
+  animation: scalePop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Smooth Scroll Behavior */
+@supports (scroll-behavior: smooth) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* Focus Visible States */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #00D4FF, 0 0 0 4px #0F172A;
+}
+
+/* Meet common mobile accessibility guidance for tap target size. */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Smooth Transitions for Interactive Elements */
+button,
+input,
+a {
+  @apply transition-all duration-200;
+}
+
+/* Micro-interaction: Hover Scale */
+button:hover:not(:disabled) {
+  @apply scale-105;
+}
+
+button:active:not(:disabled) {
+  @apply scale-95;
+}
+
+/* Accessibility: Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-fade-in,
+  .animate-pulse,
+  .animate-scale-pop,
+  .animate-typing {
+    animation: none !important;
+  }
+}
+
+/* ============================================
+   COMPONENT-SPECIFIC STYLES
+   ============================================ */
+
+/* Chat Messages Container */
+.chat-container {
+  @apply flex flex-col gap-4 overflow-y-auto;
+}
+
+.chat-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-container::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+.chat-container::-webkit-scrollbar-thumb {
+  @apply bg-white/10 rounded-full hover:bg-white/20;
+}
+
+/* Chat Bubble Styling */
+.chat-bubble {
+  max-width: 40rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.chat-bubble.user {
+  background: linear-gradient(135deg, #6C63FF, #00D4FF);
+  color: white;
+  margin-left: auto;
+}
+
+.chat-bubble.ai {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  color: #FFFFFF;
+}
+
+/* Typing Indicator Dots */
+.typing-indicator {
+  @apply flex items-center gap-1;
+}
+
+.typing-indicator span {
+  @apply w-2 h-2 rounded-full bg-secondary animate-pulse;
+}
+
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.2s;
+}
+
+/* Progress Bars */
+.progress-bar {
+  @apply h-2 bg-white/5 rounded-full overflow-hidden;
+}
+
+.progress-bar-fill {
+  @apply h-full transition-all duration-500;
+}
+
+/* Input Field Focus Ring */
+input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px #00D4FF, 0 0 0 4px #0F172A;
+}
+
+/* Button States */
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Cards and Widgets */
+.widget {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  animation: fadeIn 0.4s ease-in-out;
+}
+
+/* Smooth focus visible for accessibility */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #00D4FF, 0 0 0 4px #0F172A;
+  border-radius: 0.5rem;
+}
+
+/* Remove default focus outline */
+button:focus,
+a:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px #00D4FF, 0 0 0 4px #0F172A;
+}
+
+/* Utility: scrollbar styling for dark mode */
+::-webkit-scrollbar {
+  width: 0.5rem;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #94A3B8;
+  border-radius: 0.5rem;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #FFFFFF;
+}
+
+/* Placeholder text color */
+::placeholder {
+  color: #64748B;
+}
+
+/* Selection color */
+::selection {
+  background-color: #6C63FF;
+  color: white;
+}
+
