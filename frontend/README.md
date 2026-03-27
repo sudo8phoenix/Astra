@@ -1,158 +1,97 @@
-# AI Personal Assistant Dashboard — Frontend
+# AI Personal Assistant Frontend
 
-React + Tailwind CSS UI for the AI Personal Assistant.
+React and Vite client for the AI assistant dashboard, including chat, tasks, calendar views, and authentication flows.
 
-## 📋 Features
+## Overview
 
-- ✅ **Design System**: Glassmorphism, gradients, and glow effects
-- ✅ **Responsive Layout**: Mobile-first, adapts to all screen sizes
-- ✅ **Semantic HTML**: Proper ARIA labels and accessibility landmarks
-- ✅ **Chat Panel**: Real-time messaging with AI responses
-- ✅ **Dashboard Widgets**: Tasks, Calendar, Activity tracking
-- ✅ **Dark Mode**: Built-in dark theme with custom color tokens
+The frontend provides:
 
-## 🚀 Quick Start
+- Conversational chat interface with assistant responses
+- Dashboard widgets for tasks and schedule visibility
+- OAuth-aware login and session handling
+- Responsive experience across desktop and mobile
 
-### Installation
+## Technology Stack
+
+- React 18
+- Vite 5
+- Tailwind CSS 3
+- Nginx (containerized static serving)
+
+## Project Structure
+
+```text
+frontend/
+	src/
+		components/        # UI components (chat, widgets, auth, layout)
+		lib/               # API client and helper utilities
+		App.jsx            # Application root
+		main.jsx           # React entry point
+		index.css          # Global styles and Tailwind layers
+	index.html
+	vite.config.js
+	tailwind.config.js
+	postcss.config.js
+	nginx.conf
+	default.conf
+```
+
+## Local Development
+
+Install dependencies and run the dev server from the frontend folder:
 
 ```bash
 cd frontend
 npm install
-```
-
-### Development
-
-```bash
 npm run dev
 ```
 
-Visit `http://localhost:3000`
+By default, Vite serves the app on localhost and proxies API calls to the backend target configured in [vite.config.js](vite.config.js).
 
-### Build
+## Build and Preview
 
 ```bash
+cd frontend
 npm run build
+npm run preview
 ```
 
-## 📁 Project Structure
+Build artifacts are generated in `dist/`.
 
-```
-frontend/
-├── public/                 # Static assets
-├── src/
-│   ├── components/
-│   │   ├── Layout.jsx      # Main layout wrapper
-│   │   ├── Sidebar.jsx     # Navigation sidebar
-│   │   ├── ChatPanel.jsx   # Chat interface
-│   │   ├── WidgetsRegion.jsx # Dashboard widgets container
-│   │   ├── TasksWidget.jsx # Task list widget
-│   │   ├── CalendarWidget.jsx # Daily schedule
-│   │   └── ActivityWidget.jsx # Metrics/insights
-│   ├── App.jsx             # Root component
-│   ├── main.jsx            # Entry point
-│   └── index.css           # Global styles + Tailwind
-├── index.html              # HTML entry
-├── tailwind.config.js      # Design tokens & theme
-├── vite.config.js          # Vite config
-├── postcss.config.js       # PostCSS config
-└── package.json
-```
+## Available Scripts
 
-## 🎨 Design Tokens
+- `npm run dev` - start local development server
+- `npm run build` - create production build
+- `npm run preview` - preview the production build locally
+- `npm run lint` - run lint checks
 
-### Colors
-- **Primary**: `#6C63FF` (Purple)
-- **Secondary**: `#00D4FF` (Cyan)
-- **Background**: `#0F172A` (Dark Blue)
-- **Text Primary**: `#FFFFFF` (White)
-- **Text Secondary**: `#94A3B8` (Gray)
+## Backend Integration
 
-### Typography
-- **H1**: 28px
-- **H2**: 20px
-- **Body**: 14px
+- Frontend requests use `/api/v1/...` endpoints.
+- In development, requests are proxied by Vite.
+- In containerized deployment, Nginx configuration routes static assets and API traffic.
 
-### Spacing
-- Grid: 12-column
-- Base unit: 16px
-- Card padding: 16–24px
+## Deployment Notes
 
-### Border Radius
-- Small: 8px
-- Medium: 12px
-- Large: 16px
-- Extra Large: 24px
-
-## ♿ Accessibility
-
-- ✅ Semantic HTML (`<nav>`, `<main>`, `<section>`, `<article>`)
-- ✅ ARIA labels for dynamic content
-- ✅ Keyboard navigation support
-- ✅ Focus-visible states
-- ✅ High contrast text
-- ✅ `prefers-reduced-motion` support
-- ✅ Proper alt text and labels
-
-## 📱 Responsive Breakpoints
-
-- **Mobile**: < 640px (Single column)
-- **Tablet**: 640px–1024px (2 columns)
-- **Desktop**: > 1024px (3 columns + sidebar fixed)
-
-## 🔌 API Integration
-
-Frontend connects to backend via:
-
-```
-/api/v1/...
-```
-
-Configured in `vite.config.js` with proxy to `http://localhost:8000`
-
-## 📦 Dependencies
-
-- **React 18**: UI library
-- **Tailwind CSS 3**: Styling framework
-- **Vite 5**: Build tool
-
-## 🛠️ Scripts
+For Docker-based deployment, use the included Dockerfile and Nginx configs.
 
 ```bash
-npm run dev      # Start development server
-npm run build    # Build for production
-npm run preview  # Preview production build
-npm run lint     # Run ESLint
+cd frontend
+docker build -t ai-assistant-frontend:latest .
+docker run -p 3000:80 ai-assistant-frontend:latest
 ```
 
-## 🚀 Deployment
+Ensure backend base URLs and CORS settings are aligned for the target environment.
 
-```bash
-# Build static assets
-npm run build
-```
+## Troubleshooting
 
-- The production build output is generated in `dist/`.
-- Serve `dist/` behind Nginx (see `nginx.conf` and `default.conf`).
-- Ensure API proxy/target points to the correct backend host in your environment.
+- Dependency install issues: remove `node_modules` and `package-lock.json`, then reinstall.
+- API connectivity issues: confirm backend is running and proxy configuration is correct.
+- Blank page after deploy: verify static serving path and Nginx configuration.
+- CORS failures: align backend allowed origins with frontend domain and protocol.
 
-## 🆘 Troubleshooting
+## Related Documentation
 
-- `npm install` fails: remove `node_modules` and `package-lock.json`, then reinstall.
-- Frontend cannot reach backend: verify backend is running and proxy target is correct.
-- Blank page in production: confirm static files are served from `dist/` and fallback routing is configured.
-- CORS errors: align backend allowed origins with the frontend domain.
-
-## 🔄 Next Steps (Integration Gate 1)
-
-- [ ] Define API DTOs for chat, task, calendar, email
-- [ ] Connect ChatPanel to backend WebSocket
-- [ ] Implement real-time widget updates
-- [ ] Add sample data fetching from `/api/v1/`
-
-## Repository Tracking Policy
-
-This repository currently ignores most auxiliary artifacts at the root policy level:
-- Markdown files except `README.md`/`readme.md`
-- Shell scripts (`*.sh`)
-- YAML files (`*.yml`, `*.yaml`)
-- `SETUP_SCRIPTS/`
+- [../FRONTEND_TOOLS_INTEGRATION.md](../FRONTEND_TOOLS_INTEGRATION.md)
+- [../TESTING_QUICKSTART.md](../TESTING_QUICKSTART.md)
+- [../DEPLOYMENT_READINESS.md](../DEPLOYMENT_READINESS.md)

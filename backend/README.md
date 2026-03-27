@@ -1,140 +1,134 @@
-# Backend - AI Personal Assistant API
+# AI Personal Assistant Backend
 
-FastAPI-based backend for the AI Personal Assistant agent system.
+Production-oriented FastAPI backend for conversational planning, task management, calendar operations, and Gmail workflows.
 
-## 🚀 Quick Start
+## Overview
+
+This service provides:
+
+- REST APIs for chat, tasks, calendar, and email workflows
+- Agent orchestration (planner, router, tool execution, response synthesis)
+- Google OAuth integrations (Gmail and Calendar)
+- PostgreSQL persistence with SQLAlchemy and Alembic
+- Redis-backed caching and runtime state support
+
+## Technology Stack
+
+- Python 3.11
+- FastAPI + Uvicorn
+- SQLAlchemy + Alembic
+- PostgreSQL + Redis
+- LangChain / LangGraph + Groq
+- Google APIs (Gmail, Calendar)
+
+## Repository Layout
+
+```text
+backend/
+	app/
+		agent/            # Planner/router/tools orchestration
+		api/              # Versioned API endpoints
+		core/             # Config, auth, security, utilities
+		db/               # ORM models and DB integration
+		integrations/     # External connectors (Google, etc.)
+		repositories/     # Data access layer
+		schemas/          # Request/response contracts
+		services/         # Domain and integration services
+	alembic/            # Database migrations
+	tests/              # Unit and integration tests
+```
+
+## Local Development
+
+### 1. Install dependencies
 
 ```bash
-# Setup
 cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# Configure
-cp .env.example .env
-# Edit .env with your configuration
-
-# Run
-uvicorn app.main:app --reload
-
-# Access API docs
-# Swagger UI: http://localhost:8000/docs
-# ReDoc: http://localhost:8000/redoc
 ```
 
-## 🔒 Security Features (Agent D)
-
-### Authentication & Authorization
-
-- **JWT Tokens** with revocation support (JTI blacklist)
-- **OAuth 2.0** (Google, GitHub)
-- **Token Refresh** mechanism
-- **Secure Scopes** for fine-grained permissions
-
-### Secrets Management
-
-- Environment variables (dev/staging)
-- Vault integration ready (AWS/HashiCorp)
-- Encrypted credential storage
-- Automatic token encryption
-
-### Audit Logging
-
-- Comprehensive action tracking (25+ types)
-- Approval workflow logging
-- Immutable audit trail in database
-- User activity history
-
-### CI/CD Security
-
-- SAST (Bandit)
-- Dependency scanning (pip-audit, safety)
-- Docker image scanning
-
-## 📁 Project Structure
-
-```
-app/
-├── core/              # Core functionality
-│   ├── config.py      # Settings & environment
-│   ├── auth.py        # JWT & OAuth (NEW)
-│   ├── security.py    # Secrets & crypto (NEW)
-│   └── audit.py       # Audit logging (NEW)
-├── api/               # API routes
-│   └── v1/
-│       ├── router.py
-│       └── endpoints/
-├── db/                # Database
-│   ├── config.py
-│   └── migrations/    # Alembic (NEW)
-└── schemas/           # Data models
-```
-
-## ⚙️ Configuration
-
-**Environment Variables** (see `.env.example`):
-
-- Application (debug, origins, etc.)
-- Database (PostgreSQL)
-- Cache (Redis)
-- Authentication (JWT, OAuth)
-- External APIs (Groq, Gmail, Calendar)
-- Logging & Monitoring
-- Feature Flags
-
-## 🧑‍💻 Development Notes
+### 2. Configure environment
 
 ```bash
-# Run backend from the backend folder
+cp .env.example .env
+```
+
+Set values for database, Redis, JWT, Groq, and Google OAuth credentials.
+
+### 3. Run the API
+
+```bash
 cd backend
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-- API docs are available at `http://localhost:8000/docs`
-- ReDoc is available at `http://localhost:8000/redoc`
-- Update environment variables in `.env` before starting local services
+API documentation:
 
-## 🔗 Dependencies Installed
+- Swagger: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
 
-- **Framework**: FastAPI, Uvicorn
-- **Database**: SQLAlchemy, Alembic, psycopg2
-- **Cache**: Redis
-- **Auth**: PyJWT, cryptography, passlib
-- **LLM**: LangChain, LangGraph, Groq
-- **External APIs**: Google API client
-- **Security**: bandit, pip-audit, safety
-- **Code Quality**: black, isort, ruff, mypy
+## Docker Workflow
 
-## 🐳 Docker
+From the workspace root:
 
 ```bash
-# Build
-docker build -t ai-assistant-api:latest .
-
-# Run
-docker run -p 8000:8000 -e DATABASE_URL=postgresql://... ai-assistant-api:latest
-
-# Or use docker-compose
-docker-compose up backend
+docker-compose up --build -d backend
 ```
 
-## 🚀 Deployment Notes
+Or from the backend folder:
 
-- Set production-grade values for `DATABASE_URL`, `REDIS_URL`, JWT settings, and OAuth credentials.
-- Ensure CORS and allowed origins are restricted to trusted frontend domains.
-- Use a reverse proxy (Nginx or equivalent) with TLS termination in production.
-- Run Alembic migrations before serving traffic.
+```bash
+docker build -t ai-assistant-api:latest .
+docker run -p 8000:8000 --env-file .env ai-assistant-api:latest
+```
 
-## 🆘 Troubleshooting
+## Database and Migrations
 
-- `ModuleNotFoundError`: Activate the virtual environment and reinstall requirements.
-- DB connection errors: Verify `DATABASE_URL` and that PostgreSQL is reachable.
-- OAuth callback failures: Confirm callback URLs match provider console settings.
-- 401/403 responses: Check JWT secret, token expiration, and required scopes.
+```bash
+cd backend
+alembic upgrade head
+```
 
-## 📚 Documentation
+Create a new migration:
 
-- **[SECURITY_DEVOPS.md](../SECURITY_DEVOPS.md)** - Complete security guide
-- **[AGENT_D_COMPLETION.md](../AGENT_D_COMPLETION.md)** - Delivery summary
-- **[.env.example](.env.example)** - Configuration template
+```bash
+alembic revision --autogenerate -m "describe_change"
+```
+
+## Testing
+
+```bash
+cd backend
+pytest
+```
+
+Run specific test suites:
+
+```bash
+pytest tests/unit
+pytest tests/integration
+```
+
+## Security and Operations
+
+- JWT-based authentication with scoped access
+- OAuth token handling for external providers
+- Structured logging and audit-friendly events
+- Dependency and security scanning in CI
+
+For security implementation details, see [../SECURITY_DEVOPS.md](../SECURITY_DEVOPS.md).
+
+## Troubleshooting
+
+- Import/module errors: ensure virtual environment is active and dependencies are installed.
+- Database connection failures: verify `DATABASE_URL` and Postgres availability.
+- OAuth callback issues: confirm provider redirect URIs match your configured callback endpoint.
+- Unauthorized responses: validate JWT secret, token lifetime, and scopes.
+
+## Additional References
+
+- [../TESTING.md](../TESTING.md)
+- [../DEPLOYMENT_READINESS.md](../DEPLOYMENT_READINESS.md)
+- [.env.example](.env.example)
