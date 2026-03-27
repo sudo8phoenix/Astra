@@ -124,6 +124,24 @@ npm run preview  # Preview production build
 npm run lint     # Run ESLint
 ```
 
+## 🚀 Deployment
+
+```bash
+# Build static assets
+npm run build
+```
+
+- The production build output is generated in `dist/`.
+- Serve `dist/` behind Nginx (see `nginx.conf` and `default.conf`).
+- Ensure API proxy/target points to the correct backend host in your environment.
+
+## 🆘 Troubleshooting
+
+- `npm install` fails: remove `node_modules` and `package-lock.json`, then reinstall.
+- Frontend cannot reach backend: verify backend is running and proxy target is correct.
+- Blank page in production: confirm static files are served from `dist/` and fallback routing is configured.
+- CORS errors: align backend allowed origins with the frontend domain.
+
 ## 🔄 Next Steps (Integration Gate 1)
 
 - [ ] Define API DTOs for chat, task, calendar, email
@@ -135,7 +153,6 @@ npm run lint     # Run ESLint
 
 This repository currently ignores most auxiliary artifacts at the root policy level:
 - Markdown files except `README.md`/`readme.md`
-- Test files and test directories
 - Shell scripts (`*.sh`)
 - YAML files (`*.yml`, `*.yaml`)
 - `SETUP_SCRIPTS/`

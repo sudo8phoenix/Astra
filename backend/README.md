@@ -26,27 +26,30 @@ uvicorn app.main:app --reload
 ## 🔒 Security Features (Agent D)
 
 ### Authentication & Authorization
+
 - **JWT Tokens** with revocation support (JTI blacklist)
 - **OAuth 2.0** (Google, GitHub)
 - **Token Refresh** mechanism
 - **Secure Scopes** for fine-grained permissions
 
 ### Secrets Management
+
 - Environment variables (dev/staging)
 - Vault integration ready (AWS/HashiCorp)
 - Encrypted credential storage
 - Automatic token encryption
 
 ### Audit Logging
+
 - Comprehensive action tracking (25+ types)
 - Approval workflow logging
 - Immutable audit trail in database
 - User activity history
 
 ### CI/CD Security
+
 - SAST (Bandit)
 - Dependency scanning (pip-audit, safety)
-- Automated security tests
 - Docker image scanning
 
 ## 📁 Project Structure
@@ -66,17 +69,12 @@ app/
 │   ├── config.py
 │   └── migrations/    # Alembic (NEW)
 └── schemas/           # Data models
-
-tests/
-├── conftest.py        # Pytest fixtures (NEW)
-├── unit/
-│   └── test_auth.py   # Auth tests (NEW)
-└── integration/
 ```
 
 ## ⚙️ Configuration
 
 **Environment Variables** (see `.env.example`):
+
 - Application (debug, origins, etc.)
 - Database (PostgreSQL)
 - Cache (Redis)
@@ -85,22 +83,17 @@ tests/
 - Logging & Monitoring
 - Feature Flags
 
-## 🧪 Testing
+## 🧑‍💻 Development Notes
 
 ```bash
-# Run all tests
-pytest tests/ -v
-
-# With coverage
-pytest tests/ --cov=app --cov-report=html
-
-# By marker
-pytest -m unit -v           # Unit tests
-pytest -m security -v       # Security tests
-pytest -m integration -v    # Integration tests
+# Run backend from the backend folder
+cd backend
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Coverage:** 80%+ for core auth/security modules
+- API docs are available at `http://localhost:8000/docs`
+- ReDoc is available at `http://localhost:8000/redoc`
+- Update environment variables in `.env` before starting local services
 
 ## 🔗 Dependencies Installed
 
@@ -110,7 +103,6 @@ pytest -m integration -v    # Integration tests
 - **Auth**: PyJWT, cryptography, passlib
 - **LLM**: LangChain, LangGraph, Groq
 - **External APIs**: Google API client
-- **Testing**: pytest, pytest-cov, pytest-asyncio
 - **Security**: bandit, pip-audit, safety
 - **Code Quality**: black, isort, ruff, mypy
 
@@ -127,18 +119,22 @@ docker run -p 8000:8000 -e DATABASE_URL=postgresql://... ai-assistant-api:latest
 docker-compose up backend
 ```
 
+## 🚀 Deployment Notes
+
+- Set production-grade values for `DATABASE_URL`, `REDIS_URL`, JWT settings, and OAuth credentials.
+- Ensure CORS and allowed origins are restricted to trusted frontend domains.
+- Use a reverse proxy (Nginx or equivalent) with TLS termination in production.
+- Run Alembic migrations before serving traffic.
+
+## 🆘 Troubleshooting
+
+- `ModuleNotFoundError`: Activate the virtual environment and reinstall requirements.
+- DB connection errors: Verify `DATABASE_URL` and that PostgreSQL is reachable.
+- OAuth callback failures: Confirm callback URLs match provider console settings.
+- 401/403 responses: Check JWT secret, token expiration, and required scopes.
+
 ## 📚 Documentation
 
 - **[SECURITY_DEVOPS.md](../SECURITY_DEVOPS.md)** - Complete security guide
-- **[TESTING.md](../TESTING.md)** - Testing strategy
 - **[AGENT_D_COMPLETION.md](../AGENT_D_COMPLETION.md)** - Delivery summary
 - **[.env.example](.env.example)** - Configuration template
-
-## Repository Tracking Policy
-
-This repository currently ignores most auxiliary artifacts at the root policy level:
-- Markdown files except `README.md`/`readme.md`
-- Test files and test directories
-- Shell scripts (`*.sh`)
-- YAML files (`*.yml`, `*.yaml`)
-- `SETUP_SCRIPTS/`
