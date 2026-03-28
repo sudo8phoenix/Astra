@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.auth import get_current_user, TokenPayload
+from app.core.auth import get_current_user, TokenPayload, JWTManager
 from app.core.auth_extended import GoogleOAuthTokens
 from app.db.config import get_db
 from app.db.models import User, CalendarEvent, Approval
@@ -139,6 +139,30 @@ def _to_calendar_event_schema(
     )
 
 
+def _db_event_to_calendar_event_schema(event: CalendarEvent, timezone: str) -> CalendarEventSchema:
+    """Build response schema from persisted CalendarEvent row."""
+    return CalendarEventSchema(
+        id=event.id,
+        user_id=event.user_id,
+        google_event_id=event.google_event_id,
+        title=event.title,
+        description=event.description,
+        start_time=event.start_time,
+        end_time=event.end_time,
+        timezone=timezone,
+        location=event.location,
+        attendees=event.attendees or [],
+        status=EventStatus(event.status.value if hasattr(event.status, "value") else str(event.status).lower()),
+        recurrence=None,
+        color=event.color_id,
+        ai_generated=False,
+        metadata=None,
+        created_at=event.created_at,
+        updated_at=event.updated_at,
+        trace_id=None,
+    )
+
+
 async def get_current_user_from_db(
     current_token: TokenPayload = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -155,18 +179,18 @@ async def get_current_user_from_db(
 # ============================================================================
 
 
-@router.post("/oauth-authorize")
+@router.get("/oauth-authorize")
 async def initiate_oauth_flow(
     state: Optional[str] = Query(None, description="Optional state parameter for OAuth round-trip"),
-    current_user: User = Depends(get_current_user_from_db),
-) -> ApiResponse:
+) -> dict:
     """
     Initiate Google Calendar OAuth flow.
 
     Generates authorization URL for user to connect their Google Calendar.
+    This endpoint is called from the login page, so no auth required.
 
     Returns:
-        Authorization URL to redirect user to
+        Dictionary with oauth_url for redirection
     """
     try:
         state = state or str(uuid.uuid4())
@@ -176,10 +200,7 @@ async def initiate_oauth_flow(
 
         auth_url = calendar_service.get_authorization_url(state)
 
-        return ApiResponse(
-            data={"authorization_url": auth_url, "state": state},
-            message="Authorization URL generated",
-        )
+        return {"oauth_url": auth_url, "state": state}
     except Exception as e:
         logger.error(f"OAuth flow initiation failed: {str(e)}")
         raise HTTPException(
@@ -191,23 +212,24 @@ async def initiate_oauth_flow(
 @router.post("/oauth-callback")
 async def handle_oauth_callback(
     code: str = Query(..., description="Authorization code from Google"),
-    state: str = Query(..., description="State parameter for CSRF protection"),
-    current_user: User = Depends(get_current_user_from_db),
+    state: Optional[str] = Query(None, description="State parameter for CSRF protection"),
+    token: Optional[str] = Query(None, description="JWT token for authenticated user"),
     db: Session = Depends(get_db),
 ) -> ApiResponse:
     """
     Handle Google Calendar OAuth callback.
 
-    Exchanges authorization code for access tokens and stores them securely.
+    Exchanges authorization code for access tokens and stores them.
+    Works for both authenticated users (linking calendar) and new users (first login).
 
     Args:
         code: Authorization code from Google OAuth flow
-        state: State parameter for CSRF validation
-        current_user: Authenticated user
+        state: State parameter for CSRF validation (optional)
+        token: JWT token if user is already authenticated (optional)
         db: Database session
 
     Returns:
-        Success message with OAuth connection status
+        Success message with user info and auth token
     """
     try:
         # In production, verify state parameter against stored value
@@ -215,15 +237,34 @@ async def handle_oauth_callback(
         # Exchange code for tokens
         tokens = await calendar_service.exchange_code_for_tokens(code)
 
-        # Store tokens in user's OAuth tokens (encrypted in production)
-        # This is a simplified version - in production use encrypted storage
-        user_repo = UserRepository(db)
-        user = user_repo.get_by_id(current_user.id)
+        # Determine which user to link calendar to
+        user = None
+        current_user_id = None
 
+        # If JWT token provided, use authenticated user
+        if token:
+            try:
+                token_payload = JWTManager.verify_token(token)
+                user = db.query(User).filter(User.id == token_payload.sub).first()
+                current_user_id = token_payload.sub
+            except Exception:
+                user = None
+
+        # If no authenticated user, create or get user from dev email
         if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-            )
+            demo_email = "demo.user@local.dev"
+            user = db.query(User).filter(User.email == demo_email).first()
+            if not user:
+                user = User(
+                    email=demo_email,
+                    name="OAuth User",
+                    timezone="UTC",
+                    is_active=True,
+                )
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+            current_user_id = user.id
 
         # Store OAuth tokens in user preferences
         preferences = dict(user.preferences or {})
@@ -237,15 +278,28 @@ async def handle_oauth_callback(
         }
         preferences["calendar_connected"] = True
         user.preferences = preferences
-
         user.oauth_provider = "google"
         db.add(user)
         db.commit()
 
-        logger.info(f"User {current_user.id} connected Google Calendar")
+        logger.info(f"User {current_user_id} connected Google Calendar")
+
+        # If this is a new login (no token provided), generate JWT for them
+        access_token = token
+        if not token:
+            access_token = JWTManager.create_access_token(
+                user_id=user.id,
+                email=user.email,
+                scopes=["read", "write"],
+            )
 
         return ApiResponse(
-            data={"connected": True},
+            data={
+                "connected": True,
+                "user_id": user.id,
+                "email": user.email,
+                "token": access_token,
+            },
             message="Google Calendar connected successfully",
         )
 
@@ -327,7 +381,7 @@ async def get_daily_schedule(
 
                 if not existing:
                     # Create new event in DB
-                    db_event = CalendarEvent(
+                    calendar_event_repo.create(
                         id=str(uuid.uuid4()),
                         user_id=current_user.id,
                         google_event_id=parsed_event["google_event_id"],
@@ -341,16 +395,16 @@ async def get_daily_schedule(
                         color_id=parsed_event["color_id"],
                         status=parsed_event["status"],
                     )
-                    calendar_event_repo.create(db_event)
                 else:
-                    # Update existing event
-                    existing.title = parsed_event["title"]
-                    existing.description = parsed_event["description"]
-                    existing.start_time = parsed_event["start_time"]
-                    existing.end_time = parsed_event["end_time"]
-                    existing.location = parsed_event["location"]
-                    existing.attendees = parsed_event["attendees"]
-                    calendar_event_repo.update(existing)
+                    calendar_event_repo.update(
+                        existing.id,
+                        title=parsed_event["title"],
+                        description=parsed_event["description"],
+                        start_time=parsed_event["start_time"],
+                        end_time=parsed_event["end_time"],
+                        location=parsed_event["location"],
+                        attendees=parsed_event["attendees"],
+                    )
 
             db.commit()
 
@@ -361,7 +415,8 @@ async def get_daily_schedule(
 
             # Convert to schema
             events_schema = [
-                CalendarEventSchema.model_validate(event) for event in db_events
+                _db_event_to_calendar_event_schema(event, payload.timezone)
+                for event in db_events
             ]
         except Exception as db_error:
             db.rollback()

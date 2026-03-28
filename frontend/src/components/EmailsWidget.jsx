@@ -21,42 +21,28 @@ export default function EmailsWidget() {
   const [summary, setSummary] = useState(null)
   const [showSummary, setShowSummary] = useState(false)
   const [loadingSummary, setLoadingSummary] = useState(false)
+  const [actingEmailId, setActingEmailId] = useState(null)
+  const [expandedActionMenu, setExpandedActionMenu] = useState(null)
+  const [snoozeHours, setSnoozeHours] = useState(1)
+
+  const loadEmails = async () => {
+    setIsLoading(true)
+    setError('')
+
+    try {
+      const payload = await apiRequest('/api/v1/emails/list?limit=8&offset=0')
+      const apiEmails = Array.isArray(payload?.emails) ? payload.emails : []
+      setEmails(apiEmails)
+    } catch (loadError) {
+      const message = loadError instanceof Error ? loadError.message : 'Unable to load emails.'
+      setError(message)
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   useEffect(() => {
-    let isMounted = true
-
-    const loadEmails = async () => {
-      setIsLoading(true)
-      setError('')
-
-      try {
-        const payload = await apiRequest('/api/v1/emails/list?limit=8&offset=0')
-        const apiEmails = Array.isArray(payload?.emails) ? payload.emails : []
-
-        if (!isMounted) {
-          return
-        }
-
-        setEmails(apiEmails)
-      } catch (loadError) {
-        if (!isMounted) {
-          return
-        }
-
-        const message = loadError instanceof Error ? loadError.message : 'Unable to load emails.'
-        setError(message)
-      } finally {
-        if (isMounted) {
-          setIsLoading(false)
-        }
-      }
-    }
-
     loadEmails()
-
-    return () => {
-      isMounted = false
-    }
   }, [])
 
   const loadUrgentEmails = async () => {
@@ -92,9 +78,27 @@ export default function EmailsWidget() {
         method: 'POST',
         body: JSON.stringify({ limit: 10, include_urgent_only: false }),
       })
-      setSummary(payload?.summary || payload)
+      const summaryText = payload?.summary || payload
+      setSummary(summaryText)
       setShowSummary(true)
-      setSuccessMessage('Inbox summary generated')
+      
+      // Send summary to chat for LLM analysis
+      const chatMessage = `Please analyze my email inbox summary and provide insights:\n\n${summaryText}`
+      
+      try {
+        await apiRequest('/api/v1/chat/messages', {
+          method: 'POST',
+          body: JSON.stringify({
+            message: chatMessage,
+            conversation_id: crypto.randomUUID(),
+          }),
+        })
+      } catch (chatError) {
+        // Chat submission error is not critical, just log it
+        console.error('Failed to send summary to chat:', chatError)
+      }
+      
+      setSuccessMessage('Inbox summary generated and sent to chat')
       setTimeout(() => setSuccessMessage(''), 3000)
     } catch (summaryError) {
       const message = summaryError instanceof Error ? summaryError.message : 'Failed to generate summary'
@@ -102,6 +106,98 @@ export default function EmailsWidget() {
     } finally {
       setLoadingSummary(false)
     }
+  }
+
+  const markAsRead = async (emailId) => {
+    setActingEmailId(emailId)
+    setError('')
+
+    try {
+      await apiRequest(`/api/v1/emails/${emailId}/mark-as-read`, {
+        method: 'POST',
+      })
+      
+      // Update email in list
+      setEmails(emails.map(e => e.id === emailId ? { ...e, is_unread: false } : e))
+      setSuccessMessage('Email marked as read')
+      setTimeout(() => setSuccessMessage(''), 2000)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to mark as read'
+      setError(message)
+    } finally {
+      setActingEmailId(null)
+      setExpandedActionMenu(null)
+    }
+  }
+
+  const archiveEmail = async (emailId) => {
+    setActingEmailId(emailId)
+    setError('')
+
+    try {
+      await apiRequest(`/api/v1/emails/${emailId}/archive`, {
+        method: 'POST',
+      })
+      
+      // Remove email from list
+      setEmails(emails.filter(e => e.id !== emailId))
+      setSuccessMessage('Email archived')
+      setTimeout(() => setSuccessMessage(''), 2000)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to archive email'
+      setError(message)
+    } finally {
+      setActingEmailId(null)
+      setExpandedActionMenu(null)
+    }
+  }
+
+  const deleteEmail = async (emailId) => {
+    setActingEmailId(emailId)
+    setError('')
+
+    try {
+      await apiRequest(`/api/v1/emails/${emailId}/delete`, {
+        method: 'POST',
+      })
+      
+      // Remove email from list
+      setEmails(emails.filter(e => e.id !== emailId))
+      setSuccessMessage('Email deleted')
+      setTimeout(() => setSuccessMessage(''), 2000)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete email'
+      setError(message)
+    } finally {
+      setActingEmailId(null)
+      setExpandedActionMenu(null)
+    }
+  }
+
+  const snoozeEmail = async (emailId, hours) => {
+    setActingEmailId(emailId)
+    setError('')
+
+    try {
+      await apiRequest(`/api/v1/emails/${emailId}/snooze?hours=${hours}`, {
+        method: 'POST',
+      })
+      
+      // Remove email from list
+      setEmails(emails.filter(e => e.id !== emailId))
+      setSuccessMessage(`Email snoozed for ${hours} hour${hours > 1 ? 's' : ''}`)
+      setTimeout(() => setSuccessMessage(''), 2000)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to snooze email'
+      setError(message)
+    } finally {
+      setActingEmailId(null)
+      setExpandedActionMenu(null)
+    }
+  }
+
+  const openGmailInbox = () => {
+    window.open('https://mail.google.com/mail/u/0/#inbox', '_blank')
   }
 
   return (
@@ -142,19 +238,80 @@ export default function EmailsWidget() {
       ) : (
         <ul className="space-y-2" role="list" aria-label="Latest inbox messages">
           {emails.map((email) => (
-            <li key={email.id} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2">
-              <div className="flex items-center justify-between gap-2">
-                <p className="truncate text-sm font-semibold text-text-primary">{email.subject || '(no subject)'}</p>
-                <time className="text-xs text-text-secondary">{formatTime(email.timestamp)}</time>
-              </div>
-              <p className="mt-1 truncate text-xs text-text-secondary">{email.from_name || email.from_address}</p>
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <p className="line-clamp-1 text-xs text-text-tertiary">{email.snippet || 'No preview available.'}</p>
-                {email.is_unread && (
-                  <span className="rounded-full border border-blue-300/30 bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-200">
-                    New
-                  </span>
-                )}
+            <li key={email.id} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 group hover:bg-white/8 transition-colors">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="truncate text-sm font-semibold text-text-primary">{email.subject || '(no subject)'}</p>
+                    {email.is_unread && (
+                      <span className="rounded-full border border-blue-300/30 bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-200 whitespace-nowrap">
+                        New
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 truncate text-xs text-text-secondary">{email.from_name || email.from_address}</p>
+                  <p className="mt-1 line-clamp-1 text-xs text-text-tertiary">{email.snippet || 'No preview available.'}</p>
+                </div>
+                <div className="flex items-center gap-1 ml-2">
+                  <time className="text-xs text-text-secondary whitespace-nowrap">{formatTime(email.timestamp)}</time>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedActionMenu(expandedActionMenu === email.id ? null : email.id)}
+                      disabled={actingEmailId === email.id}
+                      className="
+                        p-1 rounded text-text-secondary hover:bg-white/10 
+                        opacity-0 group-hover:opacity-100 transition-opacity
+                        disabled:opacity-50
+                      "
+                      aria-label="Email actions"
+                    >
+                      ⋮
+                    </button>
+                    
+                    {expandedActionMenu === email.id && (
+                      <div className="absolute right-0 top-full mt-1 bg-gray-900 border border-white/10 rounded-lg shadow-lg z-10 min-w-40 p-1">
+                        <button
+                          type="button"
+                          onClick={() => markAsRead(email.id)}
+                          disabled={actingEmailId === email.id}
+                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-white/10 rounded transition-colors disabled:opacity-50"
+                        >
+                          {actingEmailId === email.id ? '...' : '✓ Mark as Read'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => archiveEmail(email.id)}
+                          disabled={actingEmailId === email.id}
+                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-white/10 rounded transition-colors disabled:opacity-50"
+                        >
+                          {actingEmailId === email.id ? '...' : '📦 Archive'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const hours = prompt('Snooze for how many hours? (1-168)', '1')
+                            if (hours && parseInt(hours) > 0 && parseInt(hours) <= 168) {
+                              snoozeEmail(email.id, parseInt(hours))
+                            }
+                          }}
+                          disabled={actingEmailId === email.id}
+                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-white/10 rounded transition-colors disabled:opacity-50"
+                        >
+                          {actingEmailId === email.id ? '...' : '⏰ Snooze'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteEmail(email.id)}
+                          disabled={actingEmailId === email.id}
+                          className="w-full text-left px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/10 rounded transition-colors disabled:opacity-50"
+                        >
+                          {actingEmailId === email.id ? '...' : '🗑 Delete'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </li>
           ))}
@@ -168,7 +325,7 @@ export default function EmailsWidget() {
           {urgentEmails.slice(0, 2).map((email) => (
             <div key={email.id} className="rounded border border-red-300/20 bg-red-500/5 px-2 py-1.5">
               <p className="truncate text-xs font-semibold text-red-200">{email.subject}</p>
-              <p className="truncate text-xs text-red-100/70">{email.from_name || email.from_address}</p>
+              <p className="truncate text-xs text-red-100/70">{email.from_name || email.from_address || email.from}</p>
             </div>
           ))}
         </div>
@@ -188,6 +345,21 @@ export default function EmailsWidget() {
 
       {/* Action Buttons */}
       <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={loadEmails}
+          disabled={isLoading}
+          className="
+            touch-target flex-1 min-w-20 text-center text-xs font-semibold
+            rounded border border-green-300/30 bg-green-500/10 text-green-200
+            hover:bg-green-500/20 disabled:opacity-50 transition-colors
+            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-400
+          "
+          aria-label="Refresh emails"
+          title="Reload emails from Gmail"
+        >
+          {isLoading ? '...' : '🔄 Refresh'}
+        </button>
         <button
           type="button"
           onClick={loadUrgentEmails}
@@ -218,17 +390,20 @@ export default function EmailsWidget() {
         </button>
         <button
           type="button"
+          onClick={openGmailInbox}
           className="
             touch-target flex-1 min-w-24 text-center text-xs font-semibold
             rounded border border-white/15 bg-white/5 text-text-secondary
             hover:bg-white/10 transition-colors
             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary
           "
-          aria-label="View all emails"
+          aria-label="View all emails in Gmail"
+          title="Open Gmail inbox in a new window"
         >
-          Inbox →
+          📧 Inbox →
         </button>
       </div>
     </article>
   )
 }
+

@@ -65,8 +65,22 @@ class Task(Base):
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    priority = Column(Enum(PriorityLevel), nullable=False, default=PriorityLevel.MEDIUM)
-    status = Column(Enum(TaskStatus), nullable=False, default=TaskStatus.TODO)
+    priority = Column(
+        Enum(
+            PriorityLevel,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=PriorityLevel.MEDIUM,
+    )
+    status = Column(
+        Enum(
+            TaskStatus,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=TaskStatus.TODO,
+    )
     
     # Scheduling
     due_date = Column(DateTime, nullable=True)
@@ -105,7 +119,14 @@ class CalendarEvent(Base):
     
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    status = Column(Enum(EventStatus), nullable=False, default=EventStatus.SCHEDULED)
+    status = Column(
+        Enum(
+            EventStatus,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=EventStatus.SCHEDULED,
+    )
     
     # Time
     start_time = Column(DateTime, nullable=False)

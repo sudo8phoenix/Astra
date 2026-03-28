@@ -57,8 +57,18 @@ export default function TasksWidget() {
 
     loadTasks()
 
+    const onAssistantDataUpdated = (event) => {
+      const tools = event?.detail?.tools || []
+      if (tools.includes('create_task') || tools.includes('update_task') || tools.includes('delete_task') || tools.includes('list_tasks')) {
+        loadTasks()
+      }
+    }
+
+    window.addEventListener('assistant:data-updated', onAssistantDataUpdated)
+
     return () => {
       isMounted = false
+      window.removeEventListener('assistant:data-updated', onAssistantDataUpdated)
     }
   }, [])
 

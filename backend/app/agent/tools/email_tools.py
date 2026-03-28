@@ -97,7 +97,13 @@ def create_email_tools(db: Session):
             )
             return {"error": str(e), "status": "failed"}
     
-    def summarize_inbox(user_id: str, limit: int = 10) -> Dict[str, Any]:
+    def summarize_inbox(
+        user_id: str,
+        limit: int = 10,
+        include_urgent_only: bool = False,
+        priority: Optional[str] = None,
+        **_: Any,
+    ) -> Dict[str, Any]:
         """
         Generate AI summary of inbox.
         
@@ -115,10 +121,14 @@ def create_email_tools(db: Session):
             if not user:
                 return {"error": "User not found", "status": "failed"}
             
+            normalized_priority = (priority or "").strip().lower()
+            if normalized_priority in {"urgent", "high", "critical"}:
+                include_urgent_only = True
+
             summary = service.summarize_inbox(
                 user,
                 limit=min(limit, 20),
-                include_urgent_only=False,
+                include_urgent_only=include_urgent_only,
             )
             
             if not summary:

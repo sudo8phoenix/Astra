@@ -84,15 +84,21 @@ def create_task_tools(db: Session):
 
     def create_task(
         user_id: str,
-        title: str,
+        title: Optional[str] = None,
         description: Optional[str] = None,
         priority: str = "medium",
         due_date: Optional[str] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         start = perf_counter()
         trace_id = get_trace_id() or "N/A"
 
         try:
+            # Support common alias keys used by orchestration layers.
+            title = title or kwargs.get("task_name") or kwargs.get("task_title")
+            if not title:
+                return {"status": "failed", "error": "Task title is required"}
+
             priority_value = priority.lower()
             if priority_value == "high":
                 model_priority = Task.PriorityLevel.HIGH

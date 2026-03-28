@@ -5,18 +5,34 @@ import Login from './components/Login'
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isCheckingAuth, setIsCheckingAuth] = useState(true)
+  const [oauthError, setOauthError] = useState('')
 
   useEffect(() => {
     checkAuthentication()
   }, [])
 
   const checkAuthentication = () => {
+    const params = new URLSearchParams(window.location.search)
+    const tokenFromCallback = params.get('token')
+    const oauthErrorFromCallback = params.get('oauth_error')
+
+    if (tokenFromCallback) {
+      window.localStorage.setItem('ai_assistant_token', tokenFromCallback)
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
+
+    if (oauthErrorFromCallback) {
+      setOauthError(oauthErrorFromCallback)
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
+
     const token = window.localStorage.getItem('ai_assistant_token')
     setIsAuthenticated(!!token)
     setIsCheckingAuth(false)
   }
 
   const handleLoginSuccess = () => {
+    setOauthError('')
     setIsAuthenticated(true)
   }
 
@@ -39,7 +55,7 @@ export default function App() {
   }
 
   if (!isAuthenticated) {
-    return <Login onLoginSuccess={handleLoginSuccess} />
+    return <Login onLoginSuccess={handleLoginSuccess} initialError={oauthError} />
   }
 
   return <Layout onLogout={handleLogout} />

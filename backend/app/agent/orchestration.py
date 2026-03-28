@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import inspect
 import logging
+import re
 from datetime import datetime, timedelta
 from time import perf_counter
 from typing import Any
@@ -44,10 +46,16 @@ class AgentOrchestrator:
     def __init__(self, db: Session):
         self.db = db
         self._planner_llm = None
+        self._assistant_llm = None
         if settings.groq_api_key:
             self._planner_llm = ChatGroq(
                 model=settings.groq_planner_model,
                 temperature=0,
+                api_key=settings.groq_api_key,
+            )
+            self._assistant_llm = ChatGroq(
+                model=settings.groq_execution_model,
+                temperature=settings.llm_temperature,
                 api_key=settings.groq_api_key,
             )
 
@@ -146,7 +154,8 @@ class AgentOrchestrator:
             "2. If tools_required is empty, set action_type=chat_response\n"
             "3. Always include a reasoning field explaining what the user is trying to accomplish\n"
             "4. Return valid JSON even if you're unsure - use confidence field\n"
-            "5. If message is unclear, use chat_response action\n\n"
+            "5. If message is unclear, use chat_response action\n"
+            "6. If user is asking for advice/suggestions/brainstorming (no explicit data fetch or update request), use chat_response\n\n"
             f"User message: {state.user_input.content or ''}"
         )
 
@@ -172,26 +181,6 @@ class AgentOrchestrator:
                         parameters=entry.get("parameters") or {},
                     )
                 )
-
-            message_text = (state.user_input.content or "").lower()
-            likely_actionable = any(
-                keyword in message_text
-                for keyword in [
-                    "email",
-                    "emails",
-                    "mail",
-                    "mails",
-                    "inbox",
-                    "calendar",
-                    "meeting",
-                    "schedule",
-                    "task",
-                    "todo",
-                    "plan",
-                ]
-            )
-            if action_enum == PlannerDecision.CHAT_RESPONSE and not tools_required and likely_actionable:
-                return False
 
             state.plan = PlannerOutput(
                 action_type=action_enum,
@@ -268,8 +257,23 @@ class AgentOrchestrator:
                 if not tool_fn:
                     result = {"status": "failed", "error": f"Unknown tool: {tool_name}"}
                 else:
-                    raw_result = tool_fn(user_id=user.id, **params)
-                    result = self._normalize_tool_result(tool_name, raw_result)
+                    enriched_params = self._enrich_tool_params(
+                        tool_name=tool_name,
+                        params=params,
+                        user_message=state.user_input.content,
+                    )
+                    safe_params = self._sanitize_tool_params(tool_fn=tool_fn, params=enriched_params)
+                    missing_required = self._find_missing_required_params(tool_fn=tool_fn, params=safe_params)
+                    if missing_required:
+                        result = {
+                            "status": "failed",
+                            "error_code": "missing_required_parameters",
+                            "missing_parameters": missing_required,
+                            "error": self._format_missing_params_error(tool_name=tool_name, missing_params=missing_required),
+                        }
+                    else:
+                        raw_result = tool_fn(user_id=user.id, **safe_params)
+                        result = self._normalize_tool_result(tool_name, raw_result)
 
                 success = result.get("status") == "success"
                 error_text = result.get("error")
@@ -298,6 +302,156 @@ class AgentOrchestrator:
 
         state.current_node = "tools"
         state.metadata.nodes_executed.append("tools")
+
+    @staticmethod
+    def _sanitize_tool_params(tool_fn: Any, params: dict[str, Any]) -> dict[str, Any]:
+        """Drop unexpected parameters before invoking a tool function."""
+        if not isinstance(params, dict):
+            return {}
+
+        try:
+            signature = inspect.signature(tool_fn)
+        except (TypeError, ValueError):
+            return params
+
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            return params
+
+        allowed_keys = {
+            name
+            for name, param in signature.parameters.items()
+            if name != "user_id"
+            and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+        return {key: value for key, value in params.items() if key in allowed_keys}
+
+    @staticmethod
+    def _find_missing_required_params(tool_fn: Any, params: dict[str, Any]) -> list[str]:
+        """Return required keyword parameters that are not present or empty."""
+        try:
+            signature = inspect.signature(tool_fn)
+        except (TypeError, ValueError):
+            return []
+
+        missing: list[str] = []
+        for name, param in signature.parameters.items():
+            if name == "user_id":
+                continue
+            if param.kind not in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+                continue
+            if param.default is not inspect.Parameter.empty:
+                continue
+
+            if name not in params:
+                missing.append(name)
+                continue
+
+            value = params.get(name)
+            if value is None:
+                missing.append(name)
+            elif isinstance(value, str) and not value.strip():
+                missing.append(name)
+
+        return missing
+
+    @staticmethod
+    def _format_missing_params_error(tool_name: str, missing_params: list[str]) -> str:
+        if not missing_params:
+            return f"I need more information to run {tool_name}."
+
+        ordered = ", ".join(missing_params)
+        if tool_name == "create_event":
+            return (
+                "I can create that calendar event, but I still need: "
+                f"{ordered}. For a full-day one-time event, share the date and I can set it from 00:00 to 00:00 the next day."
+            )
+
+        return f"I can run {tool_name}, but I still need: {ordered}."
+
+    @staticmethod
+    def _enrich_tool_params(tool_name: str, params: dict[str, Any], user_message: str | None) -> dict[str, Any]:
+        """Normalize planner params and infer sensible defaults for calendar all-day requests."""
+        if not isinstance(params, dict):
+            return {}
+
+        enriched = dict(params)
+        if tool_name != "create_event":
+            return enriched
+
+        message = (user_message or "").lower()
+        normalized_time_hint = str(enriched.get("time") or "").strip().lower()
+        normalized_duration = str(enriched.get("duration") or "").strip().lower()
+        full_day_requested = any(
+            [
+                bool(enriched.get("all_day")),
+                bool(enriched.get("is_all_day")),
+                normalized_time_hint in {"all day", "full day"},
+                normalized_duration in {"all day", "full day"},
+                "all day" in message,
+                "full day" in message,
+            ]
+        )
+
+        if not full_day_requested:
+            return enriched
+
+        if not enriched.get("title"):
+            fallback_title = enriched.get("event_title") or enriched.get("name")
+            enriched["title"] = str(fallback_title or "Full Day Event")
+
+        date_value = AgentOrchestrator._extract_event_date(enriched=enriched, message=message)
+        if not date_value:
+            return enriched
+
+        if not enriched.get("start_time"):
+            enriched["start_time"] = f"{date_value}T00:00:00"
+
+        if not enriched.get("end_time"):
+            try:
+                start_date = datetime.fromisoformat(date_value)
+                next_day = (start_date + timedelta(days=1)).date().isoformat()
+                enriched["end_time"] = f"{next_day}T00:00:00"
+            except Exception:
+                pass
+
+        return enriched
+
+    @staticmethod
+    def _extract_event_date(enriched: dict[str, Any], message: str) -> str | None:
+        """Extract event date in YYYY-MM-DD from planner params or user text."""
+        candidate_keys = ["date", "event_date", "start_date"]
+        for key in candidate_keys:
+            value = enriched.get(key)
+            if isinstance(value, str) and value.strip():
+                normalized = AgentOrchestrator._normalize_date_string(value)
+                if normalized:
+                    return normalized
+
+        start_time = enriched.get("start_time")
+        if isinstance(start_time, str) and start_time.strip():
+            normalized = AgentOrchestrator._normalize_date_string(start_time)
+            if normalized:
+                return normalized
+
+        date_in_message = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", message)
+        if date_in_message:
+            normalized = AgentOrchestrator._normalize_date_string(date_in_message.group(1))
+            if normalized:
+                return normalized
+
+        return None
+
+    @staticmethod
+    def _normalize_date_string(value: str) -> str | None:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.date().isoformat()
+        except Exception:
+            try:
+                parsed = datetime.fromisoformat(value.strip().split("T")[0])
+                return parsed.date().isoformat()
+            except Exception:
+                return None
 
     @staticmethod
     def _normalize_tool_result(tool_name: str, raw_result: Any) -> dict[str, Any]:
@@ -410,13 +564,17 @@ class AgentOrchestrator:
         failed = [item for item in state.tool_results if not item.success]
         if not successful:
             if state.plan and not state.plan.tools_required:
-                message = (
-                    "I can help with email, calendar, tasks, and day planning. "
-                    "Try asking: 'check my mails', 'summarize my inbox', or 'show my tasks'."
-                )
+                message = self._generate_conversational_reply(state)
             elif failed:
                 error_text = " | ".join((item.error or "").lower() for item in failed)
-                if (
+                missing_param_failures = [
+                    item for item in failed
+                    if isinstance(item.result, dict) and item.result.get("error_code") == "missing_required_parameters"
+                ]
+                if missing_param_failures:
+                    first_failure = missing_param_failures[0]
+                    message = (first_failure.error or "").strip() or "I need a few required fields before I can complete that action."
+                elif (
                     "gmail not connected" in error_text
                     or "no emails found" in error_text
                     or "failed to summarize inbox" in error_text
@@ -430,12 +588,38 @@ class AgentOrchestrator:
                 elif "not found" in error_text:
                     message = "I could not find the required data for that request. Please try a more specific prompt."
                 else:
-                    message = "I could not complete that request yet. Please try again in a moment."
+                    # Fall back to a conversational answer when tool execution fails.
+                    message = self._generate_conversational_reply(state)
             else:
                 message = "I could not complete that request yet. Please try again in a moment."
         else:
             first = successful[0]
-            if first.tool_name == "generate_daily_plan":
+            successful_by_tool = {item.tool_name: item.result or {} for item in successful}
+
+            if "summarize_inbox" in successful_by_tool or "check_urgent_emails" in successful_by_tool:
+                summary_result = successful_by_tool.get("summarize_inbox", {})
+                urgent_result = successful_by_tool.get("check_urgent_emails", {})
+
+                total = summary_result.get("total_count", 0)
+                unread = summary_result.get("unread_count", 0)
+                summary_text = summary_result.get("summary", "")
+
+                urgent_count = urgent_result.get("urgent_count")
+                if urgent_count is None:
+                    urgent_count = summary_result.get("urgent_count", 0)
+
+                if summary_text:
+                    message = (
+                        f"I checked your inbox: {total} emails ({unread} unread), "
+                        f"with {urgent_count} urgent email(s).\n\n{summary_text}"
+                    )
+                else:
+                    message = (
+                        f"I checked your inbox: {total} emails ({unread} unread), "
+                        f"with {urgent_count} urgent email(s)."
+                    )
+
+            elif first.tool_name == "generate_daily_plan":
                 summary = (first.result or {}).get("plan", {}).get("summary", {})
                 message = (
                     "Here is your plan for today: "
@@ -443,6 +627,51 @@ class AgentOrchestrator:
                     f"{summary.get('total_tasks', 0)} total tasks, and "
                     f"{summary.get('urgent_emails', 0)} urgent emails."
                 )
+            elif first.tool_name == "list_free_slots":
+                free_slots = (first.result or {}).get("free_slots", [])
+                count = len(free_slots)
+                if count == 0:
+                    message = "I checked your schedule and there are no free slots matching that request."
+                else:
+                    preview = []
+                    for slot in free_slots[:3]:
+                        start = str(slot.get("start_time", ""))
+                        end = str(slot.get("end_time", ""))
+                        if start and end:
+                            preview.append(f"{start} to {end}")
+                    suffix = f" First slots: {', '.join(preview)}." if preview else ""
+                    message = f"I found {count} free slot(s).{suffix}"
+            elif first.tool_name == "create_task":
+                task = (first.result or {}).get("task", {})
+                title = task.get("title") or "your task"
+                status = task.get("status") or "todo"
+                priority = task.get("priority") or "medium"
+                message = f"Added task '{title}' with {priority} priority ({status})."
+            elif first.tool_name == "list_tasks":
+                count = (first.result or {}).get("count", 0)
+                message = f"I found {count} task(s)."
+            elif first.tool_name == "check_urgent_emails":
+                urgent_count = (first.result or {}).get("urgent_count", 0)
+                message = f"I checked your inbox and found {urgent_count} urgent email(s)."
+            elif first.tool_name == "summarize_inbox":
+                result = first.result or {}
+                total = result.get("total_count", 0)
+                unread = result.get("unread_count", 0)
+                summary = result.get("summary", "")
+                if summary:
+                    message = f"Inbox summary for {total} emails ({unread} unread):\n\n{summary}"
+                else:
+                    message = f"I summarized your inbox: {total} emails ({unread} unread)."
+            elif first.tool_name == "create_event":
+                result = first.result or {}
+                event = result.get("event") or result.get("event_preview") or {}
+                title = event.get("title") or "your event"
+                start_time = event.get("start_time")
+                end_time = event.get("end_time")
+                if start_time and end_time:
+                    message = f"Created '{title}' from {start_time} to {end_time}."
+                else:
+                    message = f"Created '{title}'."
             else:
                 message = f"Completed using {first.tool_name}."
 
@@ -452,6 +681,42 @@ class AgentOrchestrator:
         )
         state.current_node = "response_generator"
         state.metadata.nodes_executed.append("response_generator")
+
+    def _generate_conversational_reply(self, state: AgentState) -> str:
+        """Generate a natural assistant response when no tools are required."""
+        user_text = state.user_input.content or ""
+
+        if not self._assistant_llm:
+            return (
+                "I can help you think through options and plan next steps for your day, "
+                "calendar, emails, and tasks. Tell me what you are deciding and I will suggest a clear plan."
+            )
+
+        prompt = (
+            "You are a practical personal assistant. Respond naturally and conversationally. "
+            "The user wants normal chat guidance as well as help with planning, calendar, emails, and tasks. "
+            "Give concise, actionable suggestions. "
+            "If useful, propose a short step-by-step plan. "
+            "Do not mention internal tools, routing, or implementation details.\n\n"
+            f"User message: {user_text}"
+        )
+
+        try:
+            result = self._assistant_llm.invoke(prompt)
+            text = str(result.content or "").strip()
+            if text:
+                return text
+        except Exception:
+            logger.warning(
+                "orchestration.assistant_chat_fallback",
+                extra={"trace_id": state.trace_id, "user_id": state.user_id},
+                exc_info=True,
+            )
+
+        return (
+            "Got it. I can help you decide what to do next across tasks, calendar, and emails. "
+            "Tell me your goal for today and I will suggest a focused plan."
+        )
 
     def _persist_state(self, state: AgentState) -> None:
         try:

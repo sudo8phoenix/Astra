@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useModal } from '../lib/ModalContext'
 
 /**
  * Sidebar Navigation Component
@@ -8,9 +9,11 @@ import { useState } from 'react'
  */
 export default function Sidebar({ mobileOpen = false, onToggleMobile, onCloseMobile, onLogout }) {
   const [activeNav, setActiveNav] = useState('dashboard')
+  const { openModal } = useModal()
 
   const handleNavClick = (itemId) => {
     setActiveNav(itemId)
+    openModal(itemId)
     onCloseMobile?.()
   }
 

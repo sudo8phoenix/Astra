@@ -1,15 +1,20 @@
 import { useState } from 'react'
-import Sidebar from './Sidebar'
+import TopNav from './TopNav'
 import ChatPanel from './ChatPanel'
 import WidgetsRegion from './WidgetsRegion'
+import { ModalProvider, useModal } from '../lib/ModalContext'
+import DashboardModal from './DashboardModal'
+import NoteToSelfModal from './NoteToSelfModal'
+import TasksModal from './TasksModal'
+import CalendarModal from './CalendarModal'
 
 /**
  * Main layout component
- * Semantic structure: aside (sidebar) + main (content)
- * Responsive: stacks on mobile, side-by-side on desktop
+ * Semantic structure: nav + main (content)
+ * Responsive: stacks vertically, top nav always visible
  */
-export default function Layout({ onLogout }) {
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+function LayoutContent({ onLogout }) {
+  const { modals, closeModal } = useModal()
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden bg-background-DEFAULT text-text-primary">
@@ -25,51 +30,40 @@ export default function Layout({ onLogout }) {
         Skip to main content
       </a>
 
-      {/* Sidebar - Navigation */}
-      <Sidebar
-        mobileOpen={mobileSidebarOpen}
-        onToggleMobile={() => setMobileSidebarOpen(prev => !prev)}
-        onCloseMobile={() => setMobileSidebarOpen(false)}
-        onLogout={onLogout}
-      />
-
-      {mobileSidebarOpen && (
-        <button
-          type="button"
-          onClick={() => setMobileSidebarOpen(false)}
-          className="fixed inset-0 z-30 bg-slate-950/45 backdrop-blur-[2px] md:hidden"
-          aria-label="Close navigation overlay"
-        />
-      )}
+      {/* Top Navigation */}
+      <TopNav onLogout={onLogout} />
 
       {/* Main Content Region */}
       <main 
         id="main-content"
-        className="relative z-10 flex min-h-screen flex-1 flex-col overflow-hidden md:ml-64"
+        className="relative z-10 flex min-h-[calc(100vh-73px)] flex-col overflow-hidden"
         role="main"
         aria-label="Dashboard"
       >
-        <header className="sticky top-0 z-20 flex items-center justify-between border-b border-white/10 bg-background-DEFAULT/80 px-4 py-3 backdrop-blur-md md:hidden">
-          <button
-            type="button"
-            onClick={() => setMobileSidebarOpen(true)}
-            className="touch-target rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm font-semibold"
-            aria-label="Open navigation"
-          >
-            Menu
-          </button>
-          <p className="text-sm font-semibold tracking-wide text-text-secondary">Daily Briefing</p>
-        </header>
-
-        <div className="grid h-full flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 md:gap-5 md:p-6 xl:grid-cols-12">
-          <section className="xl:col-span-7">
+        <div className="grid h-full flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 md:gap-5 md:p-6 lg:grid-cols-12">
+          <section className="lg:col-span-7">
             <ChatPanel />
           </section>
-          <section className="xl:col-span-5">
+
+          <section className="lg:col-span-5">
             <WidgetsRegion />
           </section>
         </div>
       </main>
+
+      {/* Modals */}
+      <DashboardModal isOpen={modals.dashboard} onClose={() => closeModal('dashboard')} />
+      <NoteToSelfModal isOpen={modals.messages} onClose={() => closeModal('messages')} />
+      <TasksModal isOpen={modals.tasks} onClose={() => closeModal('tasks')} />
+      <CalendarModal isOpen={modals.calendar} onClose={() => closeModal('calendar')} />
     </div>
+  )
+}
+
+export default function Layout({ onLogout }) {
+  return (
+    <ModalProvider>
+      <LayoutContent onLogout={onLogout} />
+    </ModalProvider>
   )
 }

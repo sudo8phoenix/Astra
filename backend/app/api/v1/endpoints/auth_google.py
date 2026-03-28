@@ -1,22 +1,42 @@
 """Google OAuth callback bridge endpoints for Gmail and Calendar connections."""
 
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.core.auth import JWTManager
+from app.core.config import settings
 from app.db.config import get_db
 from app.db.models import User
 from app.repositories.repositories import UserRepository
 from app.schemas.common import ApiResponse
 from app.services.calendar import GoogleCalendarService
+from app.services.unified_oauth import UnifiedGoogleOAuthService
 from app.services.email_service import EmailService
 
 router = APIRouter(prefix="/auth/google", tags=["auth"])
 logger = logging.getLogger(__name__)
+
+
+def _frontend_redirect_html(*, token: Optional[str] = None, error: Optional[str] = None) -> RedirectResponse:
+    """Return an HTTP redirect that sends callback results to the frontend app."""
+    params = {}
+    if token:
+        params["token"] = token
+    if error:
+        params["oauth_error"] = error
+    query = urlencode(params)
+    destination = f"{settings.frontend_url}/"
+    if query:
+        destination = f"{destination}?{query}"
+
+    return RedirectResponse(url=destination, status_code=status.HTTP_302_FOUND)
 
 
 def _extract_bearer_token(request: Request) -> Optional[str]:
@@ -25,6 +45,195 @@ def _extract_bearer_token(request: Request) -> Optional[str]:
     if not auth_header.startswith("Bearer "):
         return None
     return auth_header.replace("Bearer ", "", 1).strip()
+
+
+@router.get("/login", response_model=dict)
+async def unified_oauth_login() -> dict:
+    """
+    Generate unified Google OAuth URL for login with Gmail and Calendar.
+    
+    This combines both Gmail and Calendar scopes so user can login
+    and connect both services in one step.
+    
+    Returns:
+        Dictionary with oauth_url for redirection
+    """
+    try:
+        state = str(uuid.uuid4())
+        
+        # Combine Gmail and Calendar scopes
+        scopes = [
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/calendar.readonly",
+            "https://www.googleapis.com/auth/calendar.events",
+        ]
+        
+        params = {
+            "client_id": settings.google_oauth_client_id,
+            "redirect_uri": settings.google_oauth_redirect_uri,
+            "response_type": "code",
+            "scope": " ".join(scopes),
+            "state": state,
+            "access_type": "offline",
+            "prompt": "consent",
+            "include_granted_scopes": "true",
+        }
+        
+        oauth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+        
+        logger.info("Unified OAuth login URL generated with both Gmail and Calendar scopes")
+        return {"oauth_url": oauth_url, "state": state}
+    except Exception as e:
+        logger.error(f"Failed to generate unified OAuth URL: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate login URL",
+        )
+
+
+@router.post("/unified-callback", response_model=dict)
+async def unified_oauth_callback(
+    code: str = Query(..., description="Google OAuth authorization code"),
+    state: Optional[str] = Query(None, description="OAuth state"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Handle unified Google OAuth callback for login with Gmail and Calendar connected.
+    
+    This endpoint creates a new user (or gets existing one) and connects
+    both Gmail and Calendar tokens in one step using a single authorization code.
+    
+    IMPORTANT: Google OAuth codes are single-use. We exchange once and store
+    the token for both services.
+    
+    Args:
+        code: Authorization code from Google
+        state: State parameter for CSRF protection
+        db: Database session
+        
+    Returns:
+        Dictionary with JWT token and user info
+    """
+    if not code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing authorization code",
+        )
+    
+    try:
+        # For unified login, we'll create/get user and connect both services
+        demo_email = "demo.user@local.dev"
+        user = db.query(User).filter(User.email == demo_email).first()
+        if not user:
+            user = User(
+                email=demo_email,
+                name="OAuth User",
+                timezone="UTC",
+                is_active=True,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        
+        gmail_connected = False
+        calendar_connected = False
+        
+        # Exchange code ONCE using UnifiedGoogleOAuthService
+        # Google OAuth codes are single-use. The returned token works for all requested scopes (Gmail + Calendar)
+        tokens = None
+        try:
+            unified_service = UnifiedGoogleOAuthService()
+            tokens = await unified_service.exchange_code_for_tokens(code)
+            logger.info(f"Successfully exchanged OAuth code for unified tokens")
+        except Exception as e:
+            logger.warning(f"Failed to exchange OAuth code: {str(e)}")
+            err_text = str(e).lower()
+            if (
+                "invalid_grant" in err_text
+                or "expired" in err_text
+                or "scope has changed" in err_text
+            ):
+                return _frontend_redirect_html(
+                    error="Google authorization code expired or was already used. Please sign in again."
+                )
+            raise
+        
+        if not tokens:
+            raise ValueError("No tokens returned from OAuth code exchange")
+        
+        # Store Gmail tokens from the exchange
+        if tokens.get("access_token"):
+            preferences = dict(user.preferences or {})
+            preferences["gmail_access_token"] = tokens.get("access_token")
+            if tokens.get("refresh_token"):
+                preferences["gmail_refresh_token"] = tokens.get("refresh_token")
+            preferences["gmail_expires_at"] = (
+                datetime.utcnow() + timedelta(seconds=tokens.get("expires_in", 3600))
+            ).isoformat()
+            preferences["gmail_connected"] = True
+            user.preferences = preferences
+            user.oauth_provider = "google"
+            db.add(user)
+            db.commit()
+            gmail_connected = True
+            logger.info(f"Gmail connected for user {user.id}")
+        
+        # Store Calendar tokens from same exchange
+        if tokens.get("access_token"):
+            preferences = dict(user.preferences or {})
+            existing_tokens = dict(preferences.get("calendar_oauth_tokens") or {})
+            preferences["calendar_oauth_tokens"] = {
+                "access_token": tokens.get("access_token"),
+                "refresh_token": tokens.get("refresh_token") or existing_tokens.get("refresh_token"),
+                "expires_at": (
+                    datetime.utcnow() + timedelta(seconds=tokens.get("expires_in", 3600))
+                ).isoformat(),
+            }
+            preferences["calendar_connected"] = True
+            user.preferences = preferences
+            user.oauth_provider = "google"
+            db.add(user)
+            db.commit()
+            calendar_connected = True
+            logger.info(f"Calendar connected for user {user.id} using shared OAuth token")
+        
+        # Generate JWT token
+        access_token = JWTManager.create_access_token(
+            user_id=user.id,
+            email=user.email,
+            scopes=["read", "write"],
+        )
+        
+        return {
+            "success": True,
+            "token": access_token,
+            "user_id": user.id,
+            "email": user.email,
+            "services_connected": {
+                "gmail": gmail_connected,
+                "calendar": calendar_connected,
+            },
+            "message": f"Login successful. Gmail: {gmail_connected}, Calendar: {calendar_connected}",
+        }
+    
+    except ValueError as e:
+        logger.warning(f"Unified OAuth callback validation failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google authorization failed. Please sign in again.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unified OAuth callback failed: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process OAuth callback",
+        )
 
 
 @router.get("/callback", response_model=ApiResponse)
@@ -38,11 +247,109 @@ async def google_oauth_callback_bridge(
     db: Session = Depends(get_db),
 ) -> ApiResponse:
     """
-    Complete Google OAuth callback and link either Gmail or Calendar to the user.
-
-    The endpoint accepts JWT token via `token` query, Authorization header,
-    or `state` as a fallback for local/manual OAuth testing.
+    Complete Google OAuth callback and link Gmail/Calendar services.
+    
+    Handles both authenticated (linking service to existing user) and 
+    unauthenticated (new unified login with both services) flows.
     """
+    # If no token and no provider, this is a unified login attempt
+    if not token and not provider:
+        try:
+            demo_email = "demo.user@local.dev"
+            user = db.query(User).filter(User.email == demo_email).first()
+            if not user:
+                user = User(
+                    email=demo_email,
+                    name="OAuth User",
+                    timezone="UTC",
+                    is_active=True,
+                )
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+            
+            gmail_connected = False
+            calendar_connected = False
+            
+            # Exchange code ONCE using UnifiedGoogleOAuthService
+            tokens = None
+            try:
+                unified_service = UnifiedGoogleOAuthService()
+                tokens = await unified_service.exchange_code_for_tokens(code)
+                logger.info(f"Successfully exchanged OAuth code for unified tokens in callback")
+            except Exception as e:
+                logger.warning(f"Failed to exchange OAuth code in unified callback: {str(e)}")
+                err_text = str(e).lower()
+                if (
+                    "invalid_grant" in err_text
+                    or "expired" in err_text
+                    or "scope has changed" in err_text
+                ):
+                    return _frontend_redirect_html(
+                        error="Google authorization code expired or was already used. Please sign in again."
+                    )
+                raise
+            
+            if tokens and tokens.get("access_token"):
+                # Store Gmail tokens from shared OAuth exchange
+                preferences = dict(user.preferences or {})
+                preferences["gmail_access_token"] = tokens.get("access_token")
+                if tokens.get("refresh_token"):
+                    preferences["gmail_refresh_token"] = tokens.get("refresh_token")
+                preferences["gmail_expires_at"] = (
+                    datetime.utcnow() + timedelta(seconds=tokens.get("expires_in", 3600))
+                ).isoformat()
+                preferences["gmail_connected"] = True
+                user.preferences = preferences
+                user.oauth_provider = "google"
+                db.add(user)
+                db.commit()
+                gmail_connected = True
+                logger.info(f"Gmail connected for user {user.id} via unified callback")
+                
+                # Store Calendar tokens from same OAuth exchange
+                preferences = dict(user.preferences or {})
+                existing_tokens = dict(preferences.get("calendar_oauth_tokens") or {})
+                preferences["calendar_oauth_tokens"] = {
+                    "access_token": tokens.get("access_token"),
+                    "refresh_token": tokens.get("refresh_token") or existing_tokens.get("refresh_token"),
+                    "expires_at": (
+                        datetime.utcnow() + timedelta(seconds=tokens.get("expires_in", 3600))
+                    ).isoformat(),
+                }
+                preferences["calendar_connected"] = True
+                user.preferences = preferences
+                user.oauth_provider = "google"
+                db.add(user)
+                db.commit()
+                calendar_connected = True
+                logger.info(f"Calendar connected for user {user.id} via unified callback using shared token")
+            
+            # Generate JWT token
+            access_token = JWTManager.create_access_token(
+                user_id=user.id,
+                email=user.email,
+                scopes=["read", "write"],
+            )
+            
+            # Redirect to frontend and let frontend persist token in its own origin.
+            return _frontend_redirect_html(token=access_token)
+        
+        except ValueError as e:
+            logger.warning(f"Unified oauth callback validation failed: {str(e)}")
+            return _frontend_redirect_html(
+                error="Google authorization failed. Please sign in again."
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Unified oauth callback failed: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to process OAuth callback",
+            )
+    
+    # Existing authenticated provider-specific flow
     jwt_token = token or _extract_bearer_token(request) or state
     if not jwt_token:
         raise HTTPException(
@@ -64,8 +371,6 @@ async def google_oauth_callback_bridge(
     if not selected_provider:
         normalized_scope = (scope or "").lower()
         # Prefer Gmail when both Gmail and Calendar scopes are present.
-        # Gmail authorize URL uses include_granted_scopes=true, so Google can
-        # return previously granted calendar scopes in the callback as well.
         if "gmail" in normalized_scope or "mail.google.com" in normalized_scope:
             selected_provider = "email"
         elif "calendar" in normalized_scope:
@@ -139,10 +444,10 @@ async def google_oauth_callback_bridge(
         logger.info("Google Calendar connected for user %s", user.id)
         return ApiResponse(
             data={"connected": True, "provider": "calendar", "user_id": user.id},
-            message="Google Calendar connected successfully",
+            message="Calendar account connected successfully",
         )
 
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Invalid provider. Use 'email' or 'calendar'.",
+    return ApiResponse(
+        data={},
+        message="No provider selected",
     )

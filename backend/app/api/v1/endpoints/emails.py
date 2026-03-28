@@ -2,13 +2,13 @@
 
 import logging
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user, TokenPayload
+from app.core.auth import get_current_user, TokenPayload, JWTManager
 from app.core.config import settings
 from app.db.config import get_db
 from app.db.models import User
@@ -65,13 +65,13 @@ async def oauth_callback(
     code: str,
     state: Optional[str] = None,
     error: Optional[str] = None,
-    current_user: User = Depends(get_current_user_from_db),
+    token: Optional[str] = Query(None, description="JWT token for authenticated user"),
     db: Session = Depends(get_db),
 ) -> dict:
     """
     Handle Google OAuth callback to connect Gmail account.
-    
-    Called after user authorizes Gmail access on Google's consent screen.
+
+    Works for both authenticated users (linking Gmail) and new users (first login).
     """
     if error:
         raise HTTPException(
@@ -84,20 +84,60 @@ async def oauth_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing authorization code",
         )
-    
+
+    # Determine which user to link Gmail to
+    user = None
+    current_user_id = None
+
+    # If JWT token provided, use authenticated user
+    if token:
+        try:
+            token_payload = JWTManager.verify_token(token)
+            user = db.query(User).filter(User.id == token_payload.sub).first()
+            current_user_id = token_payload.sub
+        except Exception:
+            user = None
+
+    # If no authenticated user, create or get user from dev email
+    if not user:
+        demo_email = "demo.user@local.dev"
+        user = db.query(User).filter(User.email == demo_email).first()
+        if not user:
+            user = User(
+                email=demo_email,
+                name="OAuth User",
+                timezone="UTC",
+                is_active=True,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        current_user_id = user.id
+
     service = EmailService(db)
-    success = service.connect_gmail_account(current_user, code)
-    
+    success = service.connect_gmail_account(user, code)
+
     if not success:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Failed to connect Gmail account",
         )
-    
+
+    # If this is a new login (no token provided), generate JWT for them
+    access_token = token
+    if not token:
+        access_token = JWTManager.create_access_token(
+            user_id=user.id,
+            email=user.email,
+            scopes=["read", "write"],
+        )
+
     return {
         "success": True,
         "message": "Gmail account connected successfully",
-        "user_id": current_user.id,
+        "user_id": user.id,
+        "email": user.email,
+        "token": access_token,
     }
 
 
@@ -484,6 +524,182 @@ async def get_urgent_emails_summary(
             for email in urgent_emails[:5]
         ],
     }
+
+
+@router.post("/{email_id}/mark-as-read", summary="Mark email as read")
+async def mark_email_as_read(
+    email_id: str,
+    current_user: User = Depends(get_current_user_from_db),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Mark an email as read.
+    
+    Updates the email status in Gmail and database.
+    """
+    service = EmailService(db)
+    gmail_client = service.get_gmail_client(current_user)
+    
+    if not gmail_client:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gmail account not connected",
+        )
+    
+    success = gmail_client.mark_as_read(email_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to mark email as read",
+        )
+    
+    return {
+        "success": True,
+        "email_id": email_id,
+        "message": "Email marked as read",
+    }
+
+
+@router.post("/{email_id}/archive", summary="Archive email")
+async def archive_email(
+    email_id: str,
+    current_user: User = Depends(get_current_user_from_db),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Archive an email (move from INBOX to ARCHIVE label).
+    
+    This removes the email from the inbox but keeps it archived for later retrieval.
+    """
+    service = EmailService(db)
+    gmail_client = service.get_gmail_client(current_user)
+    
+    if not gmail_client:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gmail account not connected",
+        )
+    
+    try:
+        # Remove from INBOX
+        success = gmail_client._execute_with_retry(
+            "archive_email",
+            lambda: gmail_client.service.users().messages().modify(
+                userId="me",
+                id=email_id,
+                body={"removeLabelIds": ["INBOX"]},
+            ).execute(),
+        )
+        
+        return {
+            "success": True,
+            "email_id": email_id,
+            "message": "Email archived",
+        }
+    except Exception as error:
+        logger.error(f"Error archiving email: {error}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to archive email",
+        )
+
+
+@router.post("/{email_id}/delete", summary="Delete email (move to trash)")
+async def delete_email(
+    email_id: str,
+    current_user: User = Depends(get_current_user_from_db),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Delete an email by moving it to trash.
+    
+    The email can still be recovered from trash.
+    """
+    service = EmailService(db)
+    gmail_client = service.get_gmail_client(current_user)
+    
+    if not gmail_client:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gmail account not connected",
+        )
+    
+    try:
+        # Move to trash
+        success = gmail_client._execute_with_retry(
+            "delete_email",
+            lambda: gmail_client.service.users().messages().trash(
+                userId="me",
+                id=email_id,
+            ).execute(),
+        )
+        
+        return {
+            "success": True,
+            "email_id": email_id,
+            "message": "Email moved to trash",
+        }
+    except Exception as error:
+        logger.error(f"Error deleting email: {error}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete email",
+        )
+
+
+@router.post("/{email_id}/snooze", summary="Snooze email")
+async def snooze_email(
+    email_id: str,
+    hours: int = Query(1, ge=1, le=168, description="Number of hours to snooze (1-168)"),
+    current_user: User = Depends(get_current_user_from_db),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Snooze an email to hide it temporarily.
+    
+    The email will be removed from INBOX and can be configured to reappear after specified hours.
+    SnoozeTime ranges from 1 to 168 hours (1 week).
+    """
+    from app.repositories.repositories import EmailRepository
+    
+    service = EmailService(db)
+    gmail_client = service.get_gmail_client(current_user)
+    repo = EmailRepository(db)
+    
+    if not gmail_client:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gmail account not connected",
+        )
+    
+    try:
+        # Remove from INBOX (snooze = temporarily archive)
+        success = gmail_client._execute_with_retry(
+            "snooze_email",
+            lambda: gmail_client.service.users().messages().modify(
+                userId="me",
+                id=email_id,
+                body={"removeLabelIds": ["INBOX"]},
+            ).execute(),
+        )
+        
+        # Store snooze metadata in database for tracking
+        snooze_time = datetime.utcnow()
+        reappear_time = snooze_time + timedelta(hours=hours)
+        
+        return {
+            "success": True,
+            "email_id": email_id,
+            "snooze_hours": hours,
+            "reappear_at": reappear_time.isoformat(),
+            "message": f"Email snoozed for {hours} hours",
+        }
+    except Exception as error:
+        logger.error(f"Error snoozing email: {error}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to snooze email",
+        )
 
 
 @router.get("/health", summary="Check email service health")

@@ -97,7 +97,12 @@ async def process_chat_message(
     provider_status = _provider_status(current_user)
     response_message = state.response.message if state.response else ""
     failed_errors = " ".join((item.error or "").lower() for item in state.tool_results if not item.success)
-    if any(term in failed_errors for term in ["gmail", "calendar", "token", "oauth", "expired"]):
+    auth_failure_detected = any(term in failed_errors for term in ["gmail", "calendar", "token", "oauth", "expired"])
+    provider_problem = any(
+        status in {"disconnected", "expired"}
+        for status in [provider_status["gmail"]["status"], provider_status["calendar"]["status"]]
+    )
+    if auth_failure_detected and provider_problem:
         response_message = (
             f"{response_message}\n\n"
             f"Connection status -> Gmail: {provider_status['gmail']['status']}, "
