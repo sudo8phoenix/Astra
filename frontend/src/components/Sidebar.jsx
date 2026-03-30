@@ -126,7 +126,7 @@ export default function Sidebar({ mobileOpen = false, onToggleMobile, onCloseMob
                 `}
                 aria-current={activeNav === item.id ? 'page' : undefined}
               >
-                <span className="text-xl">{item.icon}</span>
+                <span className="text-2xl leading-none">{item.icon}</span>
                 <span className="flex-1 text-left">{item.label}</span>
               </button>
             </li>

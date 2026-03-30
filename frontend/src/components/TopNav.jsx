@@ -90,7 +90,7 @@ export default function TopNav({ onLogout }) {
                 "
                 aria-label={item.label}
               >
-                <span className="text-sm">{item.icon}</span>
+                <span className="text-lg md:text-xl leading-none">{item.icon}</span>
                 <span className="hidden md:inline">{item.label}</span>
               </button>
             ))}
