@@ -1,7 +1,7 @@
 """Rate limiting middleware using Redis."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from fastapi import Request, HTTPException, status
 from app.cache.config import get_redis
 from app.core.config import settings
@@ -53,10 +53,6 @@ class RateLimiter:
         identifier = RateLimiter.get_client_identifier(request)
         path = request.url.path
         limit = RateLimiter.get_limit_for_path(path)
-        
-        # Skip rate limiting in debug mode
-        if settings.debug:
-            return True
         
         limit_key = f"ratelimit:{identifier}:{path}"
         current_time = datetime.utcnow().timestamp()

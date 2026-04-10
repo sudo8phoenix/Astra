@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiRequest } from '../lib/apiClient'
+import { extractText, normalizeEmailListResponse, normalizeSummaryResponse, normalizeUrgentEmailResponse } from '../lib/apiResponse'
 
 function formatTime(value) {
   const date = new Date(value)
@@ -23,16 +24,13 @@ export default function EmailsWidget() {
   const [loadingSummary, setLoadingSummary] = useState(false)
   const [actingEmailId, setActingEmailId] = useState(null)
   const [expandedActionMenu, setExpandedActionMenu] = useState(null)
-  const [snoozeHours, setSnoozeHours] = useState(1)
-
   const loadEmails = async () => {
     setIsLoading(true)
     setError('')
 
     try {
       const payload = await apiRequest('/api/v1/emails/list?limit=8&offset=0')
-      const apiEmails = Array.isArray(payload?.emails) ? payload.emails : []
-      setEmails(apiEmails)
+      setEmails(normalizeEmailListResponse(payload))
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Unable to load emails.'
       setError(message)
@@ -51,9 +49,7 @@ export default function EmailsWidget() {
 
     try {
       const payload = await apiRequest('/api/v1/emails/urgent')
-      const urgent = Array.isArray(payload?.urgent_emails) ? payload.urgent_emails : 
-                     Array.isArray(payload?.emails) ? payload.emails : 
-                     payload?.critical_priority || []
+      const urgent = normalizeUrgentEmailResponse(payload)
       setUrgentEmails(urgent)
       setShowUrgent(true)
       
@@ -78,7 +74,7 @@ export default function EmailsWidget() {
         method: 'POST',
         body: JSON.stringify({ limit: 10, include_urgent_only: false }),
       })
-      const summaryText = payload?.summary || payload
+      const summaryText = normalizeSummaryResponse(payload) || extractText(payload, [], '')
       setSummary(summaryText)
       setShowSummary(true)
       
@@ -201,13 +197,13 @@ export default function EmailsWidget() {
   }
 
   return (
-    <article className="glass rounded-xl border border-white/10 p-5">
+    <article className="glass flex h-full min-h-0 flex-col overflow-hidden rounded-2xl p-4">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold text-text-primary">Latest emails</h3>
-          <p className="text-xs text-text-secondary">Live inbox snapshot from Gmail integration.</p>
+          <h3 className="font-display text-base font-semibold text-[#f6efe1]">Latest emails</h3>
+          <p className="text-xs text-[#a8bac9]">Live inbox snapshot from Gmail integration.</p>
         </div>
-        <span className="rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-text-secondary">
+        <span className="rounded-full border border-white/15 bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-[#9eb2c3]">
           {emails.length}
         </span>
       </div>
@@ -225,11 +221,11 @@ export default function EmailsWidget() {
       )}
 
       {isLoading ? (
-        <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center animate-fade-in">
+        <div className="rounded-lg border border-white/15 bg-white/[0.03] px-4 py-5 text-center animate-fade-in">
           <p className="text-sm font-semibold text-text-primary">Loading emails...</p>
         </div>
       ) : emails.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-white/20 bg-white/5 px-4 py-5 text-center animate-fade-in">
+        <div className="rounded-lg border border-dashed border-white/20 bg-white/[0.03] px-4 py-5 text-center animate-fade-in">
           <p className="text-sm font-semibold text-text-primary">No recent emails</p>
           <p className="mt-1 text-xs text-text-secondary">
             Connect Gmail or refresh later to see inbox items.
@@ -238,13 +234,13 @@ export default function EmailsWidget() {
       ) : (
         <ul className="space-y-2" role="list" aria-label="Latest inbox messages">
           {emails.map((email) => (
-            <li key={email.id} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 group hover:bg-white/8 transition-colors">
+            <li key={email.id} className="rounded-lg border border-white/15 bg-white/[0.03] px-3 py-2 group hover:bg-white/[0.06] transition-colors">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="truncate text-sm font-semibold text-text-primary">{email.subject || '(no subject)'}</p>
                     {email.is_unread && (
-                      <span className="rounded-full border border-blue-300/30 bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-200 whitespace-nowrap">
+                      <span className="rounded-full border border-[#36b5ce]/35 bg-[#36b5ce]/12 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#a6e7f4] whitespace-nowrap">
                         New
                       </span>
                     )}
@@ -270,7 +266,7 @@ export default function EmailsWidget() {
                     </button>
                     
                     {expandedActionMenu === email.id && (
-                      <div className="absolute right-0 top-full mt-1 bg-gray-900 border border-white/10 rounded-lg shadow-lg z-10 min-w-40 p-1">
+                      <div className="absolute right-0 top-full mt-1 rounded-lg border border-white/15 bg-[#0b1324] shadow-lg z-10 min-w-40 p-1">
                         <button
                           type="button"
                           onClick={() => markAsRead(email.id)}
@@ -335,7 +331,7 @@ export default function EmailsWidget() {
       {showSummary && summary && (
         <div className="mt-4 pt-4 border-t border-white/10 space-y-2">
           <p className="text-xs font-semibold text-text-primary">📋 Summary:</p>
-          <div className="rounded border border-white/10 bg-white/5 px-2 py-1.5">
+          <div className="rounded border border-white/15 bg-white/[0.03] px-2 py-1.5">
             <p className="text-xs text-text-secondary line-clamp-3">
               {typeof summary === 'string' ? summary : summary.summary || 'Summary generated'}
             </p>
@@ -351,8 +347,8 @@ export default function EmailsWidget() {
           disabled={isLoading}
           className="
             touch-target flex-1 min-w-20 text-center text-xs font-semibold
-            rounded border border-green-300/30 bg-green-500/10 text-green-200
-            hover:bg-green-500/20 disabled:opacity-50 transition-colors
+            rounded border border-white/15 bg-white/[0.03] text-[#dbe4ec]
+            hover:bg-white/[0.06] disabled:opacity-50 transition-colors
             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-400
           "
           aria-label="Refresh emails"
@@ -366,8 +362,8 @@ export default function EmailsWidget() {
           disabled={loadingUrgent}
           className="
             touch-target flex-1 min-w-24 text-center text-xs font-semibold
-            rounded border border-red-300/30 bg-red-500/10 text-red-200
-            hover:bg-red-500/20 disabled:opacity-50 transition-colors
+            rounded border border-[#f66635]/35 bg-[#f66635]/10 text-[#ffcdb9]
+            hover:bg-[#f66635]/18 disabled:opacity-50 transition-colors
             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400
           "
           aria-label="Check urgent emails"
@@ -380,8 +376,8 @@ export default function EmailsWidget() {
           disabled={loadingSummary}
           className="
             touch-target flex-1 min-w-24 text-center text-xs font-semibold
-            rounded border border-blue-300/30 bg-blue-500/10 text-blue-200
-            hover:bg-blue-500/20 disabled:opacity-50 transition-colors
+            rounded border border-[#36b5ce]/35 bg-[#36b5ce]/10 text-[#9fe1ef]
+            hover:bg-[#36b5ce]/18 disabled:opacity-50 transition-colors
             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400
           "
           aria-label="Generate inbox summary"
@@ -393,8 +389,8 @@ export default function EmailsWidget() {
           onClick={openGmailInbox}
           className="
             touch-target flex-1 min-w-24 text-center text-xs font-semibold
-            rounded border border-white/15 bg-white/5 text-text-secondary
-            hover:bg-white/10 transition-colors
+            rounded border border-white/15 bg-white/[0.03] text-[#dbe4ec]
+            hover:bg-white/[0.06] transition-colors
             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary
           "
           aria-label="View all emails in Gmail"

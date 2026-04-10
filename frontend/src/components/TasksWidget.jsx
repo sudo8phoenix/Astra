@@ -27,7 +27,7 @@ export default function TasksWidget() {
       setError('')
 
       try {
-        const payload = await apiRequest('/api/v1/tasks?limit=50&offset=0')
+        const payload = await apiRequest('/api/v1/tasks?limit=50&skip=0')
         const apiTasks = Array.isArray(payload?.tasks) ? payload.tasks : []
 
         if (!isMounted) {
@@ -161,20 +161,20 @@ export default function TasksWidget() {
   const pendingCount = tasks.length - completedCount
 
   return (
-    <article className="glass rounded-xl border border-white/10 p-5">
+    <article className="glass flex h-full min-h-0 flex-col overflow-hidden rounded-2xl p-4">
       {/* Header */}
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold text-text-primary">Tasks</h3>
-          <p className="text-xs text-text-secondary">{pendingCount} open actions for today</p>
+          <h3 className="font-display text-base font-semibold text-[#f6efe1]">Tasks</h3>
+          <p className="text-xs text-[#a8bac9]">{pendingCount} open actions for today</p>
         </div>
-        <span className="rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-text-secondary">
+        <span className="rounded-full border border-white/15 bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-[#9eb2c3]">
           {completedCount}/{tasks.length}
         </span>
       </div>
 
       {/* Progress Bar */}
-      <div className="mb-4 h-2 overflow-hidden rounded-full bg-white/5" aria-hidden="true">
+      <div className="mb-4 h-2 overflow-hidden rounded-full bg-white/[0.06]" aria-hidden="true">
         <div
           className="h-full gradient-primary transition-all duration-300"
           style={{ width: `${completionPercent}%` }}
@@ -187,11 +187,11 @@ export default function TasksWidget() {
       </div>
 
       <div className="mb-3 flex items-center justify-between">
-        <p className="text-xs text-text-secondary">Completion: {completionPercent}%</p>
+        <p className="text-xs text-[#9eb2c3]">Completion: {completionPercent}%</p>
         <button
           type="button"
           onClick={() => setShowCompleted(prev => !prev)}
-          className="touch-target rounded-md border border-white/15 bg-white/5 px-2.5 py-1.5 text-xs text-text-secondary hover:border-secondary/40 hover:text-secondary"
+          className="touch-target rounded-md border border-white/15 bg-white/[0.03] px-2.5 py-1.5 text-xs text-[#c7d3dd] hover:border-white/30 hover:bg-white/[0.06]"
           aria-pressed={showCompleted}
           aria-label={showCompleted ? 'Hide completed tasks' : 'Show completed tasks'}
         >
@@ -213,11 +213,11 @@ export default function TasksWidget() {
 
       {/* Task List */}
       {isLoading ? (
-        <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center animate-fade-in">
+        <div className="rounded-lg border border-white/15 bg-white/[0.03] px-4 py-5 text-center animate-fade-in">
           <p className="text-sm font-semibold text-text-primary">Loading tasks...</p>
         </div>
       ) : visibleTasks.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-white/20 bg-white/5 px-4 py-5 text-center animate-fade-in">
+        <div className="rounded-lg border border-dashed border-white/20 bg-white/[0.03] px-4 py-5 text-center animate-fade-in">
           <p className="text-sm font-semibold text-text-primary">No tasks to show</p>
           <p className="mt-1 text-xs text-text-secondary">
             All items are complete. Great momentum.
@@ -226,7 +226,7 @@ export default function TasksWidget() {
       ) : (
         <ul className="space-y-2" role="list">
           {visibleTasks.map(task => (
-            <li key={task.id} className="group flex min-h-11 items-center gap-3 rounded-lg p-2 transition-all hover:bg-white/5">
+            <li key={task.id} className="group flex min-h-11 items-center gap-3 rounded-lg p-2 transition-all hover:bg-white/[0.05]">
               <input
                 type="checkbox"
                 id={`task-${task.id}`}
@@ -243,7 +243,7 @@ export default function TasksWidget() {
                 htmlFor={`task-${task.id}`}
                 className={`
                   flex-1 cursor-pointer text-sm transition-all
-                  ${task.completed ? 'text-text-tertiary line-through' : 'text-text-primary'}
+                  ${task.completed ? 'text-[#7f93a4] line-through' : 'text-[#e1eaf2]'}
                 `}
               >
                 {task.title}
@@ -274,7 +274,7 @@ export default function TasksWidget() {
       <button
         type="button"
         className="
-          touch-target mt-4 w-full text-center text-sm text-secondary hover:text-secondary/80
+          touch-target mt-4 w-full text-center text-sm text-[#9fe1ef] hover:text-[#b8edf8]
           py-2 rounded transition-colors focus-visible:outline-none
           focus-visible:ring-2 focus-visible:ring-secondary
         "

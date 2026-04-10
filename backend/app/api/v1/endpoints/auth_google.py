@@ -24,6 +24,22 @@ router = APIRouter(prefix="/auth/google", tags=["auth"])
 logger = logging.getLogger(__name__)
 
 
+def _friendly_oauth_error(raw_error: str) -> str:
+    """Map low-level OAuth failures to user-facing guidance."""
+    text = (raw_error or "").lower()
+    if "invalid_grant" in text or "expired" in text:
+        return "Google authorization code expired or was already used. Please sign in again."
+    if "invalid_client" in text:
+        return "Google OAuth client credentials are invalid on the server. Please contact support."
+    if "redirect_uri" in text:
+        return "Google OAuth redirect URI is misconfigured. Please contact support."
+    if "access_denied" in text:
+        return "Google sign-in was cancelled. Please try again and approve permissions."
+    if "unauthorized_client" in text:
+        return "Google OAuth client is not authorized for this flow. Please contact support."
+    return "Google OAuth callback failed. Please sign in again."
+
+
 def _frontend_redirect_html(*, token: Optional[str] = None, error: Optional[str] = None) -> RedirectResponse:
     """Return an HTTP redirect that sends callback results to the frontend app."""
     params = {}
@@ -59,6 +75,13 @@ async def unified_oauth_login() -> dict:
         Dictionary with oauth_url for redirection
     """
     try:
+        if not settings.google_oauth_client_id or not settings.google_oauth_client_secret:
+            logger.error("Google OAuth credentials are not configured")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Google OAuth is not configured on the server. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET.",
+            )
+
         state = str(uuid.uuid4())
         
         # Combine Gmail and Calendar scopes
@@ -88,6 +111,8 @@ async def unified_oauth_login() -> dict:
         
         logger.info("Unified OAuth login URL generated with both Gmail and Calendar scopes")
         return {"oauth_url": oauth_url, "state": state}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to generate unified OAuth URL: {str(e)}")
         raise HTTPException(
@@ -245,6 +270,8 @@ async def google_oauth_callback_bridge(
     token: Optional[str] = Query(None, description="JWT token for user identification"),
     provider: Optional[str] = Query(None, description="Target integration: email or calendar"),
     scope: Optional[str] = Query(None, description="OAuth scopes returned by Google"),
+    error: Optional[str] = Query(None, description="OAuth error returned by Google"),
+    error_description: Optional[str] = Query(None, description="OAuth error description returned by Google"),
     db: Session = Depends(get_db),
 ) -> ApiResponse:
     """
@@ -253,6 +280,10 @@ async def google_oauth_callback_bridge(
     Handles both authenticated (linking service to existing user) and 
     unauthenticated (new unified login with both services) flows.
     """
+    if error:
+        description = (error_description or error).replace("+", " ").strip()
+        return _frontend_redirect_html(error=_friendly_oauth_error(description))
+
     # If no token and no provider, this is a unified login attempt
     if not token and not provider:
         try:
@@ -345,10 +376,7 @@ async def google_oauth_callback_bridge(
             raise
         except Exception as e:
             logger.error(f"Unified oauth callback failed: {str(e)}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to process OAuth callback",
-            )
+            return _frontend_redirect_html(error=_friendly_oauth_error(str(e)))
     
     # Existing authenticated provider-specific flow
     jwt_token = token or _extract_bearer_token(request) or state

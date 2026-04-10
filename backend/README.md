@@ -2,6 +2,8 @@
 
 Production-oriented FastAPI backend for conversational planning, task management, calendar operations, and Gmail workflows.
 
+> Central documentation: see [../README.md](../README.md). This file focuses on backend-specific details.
+
 ## Overview
 
 This service provides:

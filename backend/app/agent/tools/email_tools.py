@@ -345,3 +345,23 @@ def register_email_tools(graph: Any) -> None:
     # This function is a placeholder for integrating with LangGraph
     # Actual integration depends on the LangGraph architecture
     pass
+
+
+def fetch_latest_emails(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+    """Compatibility wrapper for tests and legacy imports."""
+    raise NotImplementedError("Use create_email_tools(db)['fetch_latest_emails']")
+
+
+def summarize_inbox(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+    """Compatibility wrapper for tests and legacy imports."""
+    raise NotImplementedError("Use create_email_tools(db)['summarize_inbox']")
+
+
+def check_urgent_emails(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+    """Compatibility wrapper for tests and legacy imports."""
+    raise NotImplementedError("Use create_email_tools(db)['check_urgent_emails']")
+
+
+def generate_draft_reply(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+    """Compatibility wrapper for tests and legacy imports."""
+    raise NotImplementedError("Use create_email_tools(db)['generate_draft_reply']")

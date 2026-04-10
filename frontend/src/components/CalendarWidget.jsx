@@ -65,6 +65,7 @@ export default function CalendarWidget() {
         }
 
         const message = loadError instanceof Error ? loadError.message : 'Unable to load calendar events.'
+        setEvents([])
         setError(message)
       } finally {
         if (isMounted) {
@@ -143,6 +144,7 @@ export default function CalendarWidget() {
       setTimeout(() => setSuccessMessage(''), 2000)
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Failed to refresh schedule'
+      setEvents([])
       setError(message)
     } finally {
       setIsLoading(false)
@@ -213,6 +215,7 @@ export default function CalendarWidget() {
       setEvents(apiEvents)
     } catch (createError) {
       const message = createError instanceof Error ? createError.message : 'Failed to create event'
+      setEvents([])
       setError(message)
     } finally {
       setIsCreatingEvent(false)
@@ -346,20 +349,20 @@ export default function CalendarWidget() {
   )
 
   return (
-    <article className="glass rounded-xl border border-white/10 p-5">
+    <article className="glass flex h-full min-h-0 flex-col overflow-hidden rounded-2xl p-4">
       {/* Header with Navigation */}
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h3 className="text-base font-semibold text-text-primary">
+          <h3 className="font-display text-base font-semibold text-[#f6efe1]">
             {isToday ? "Today's schedule" : 'Schedule'}
           </h3>
-          <p className="text-xs text-text-secondary">Focus on the next confirmed blocks.</p>
+          <p className="text-xs text-[#a8bac9]">Focus on the next confirmed blocks.</p>
         </div>
         <button
           type="button"
           onClick={refreshSchedule}
           disabled={isLoading}
-          className="rounded p-1.5 hover:bg-white/5 transition-colors"
+          className="rounded p-1.5 text-[#a8bac9] hover:bg-white/[0.05] transition-colors"
           aria-label="Refresh schedule"
           title="Refresh schedule"
         >
@@ -380,7 +383,7 @@ export default function CalendarWidget() {
         >
           ← Prev
         </button>
-        <div className="text-xs text-text-secondary">
+        <div className="text-xs text-[#a8bac9]">
           {displayDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
         </div>
         <div className="flex gap-2">
@@ -425,11 +428,11 @@ export default function CalendarWidget() {
 
       {/* Compact Schedule View */}
       {isLoading ? (
-        <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center animate-fade-in">
+        <div className="rounded-lg border border-white/15 bg-white/[0.03] px-4 py-5 text-center animate-fade-in">
           <p className="text-sm font-semibold text-text-primary">Loading schedule...</p>
         </div>
       ) : displayEvents.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-white/20 bg-white/5 px-4 py-5 text-center animate-fade-in">
+        <div className="rounded-lg border border-dashed border-white/20 bg-white/[0.03] px-4 py-5 text-center animate-fade-in">
           <p className="text-sm font-semibold text-text-primary">No meetings scheduled</p>
           <p className="mt-1 text-xs text-text-secondary">
             You have a clear calendar window right now.
@@ -445,7 +448,7 @@ export default function CalendarWidget() {
                 key={event.id}
                 className={`
                   min-h-11 flex items-center gap-2 rounded border px-3 py-2 text-sm
-                  transition-all bg-blue-500/15 border-blue-400/40 text-blue-100
+                  transition-all bg-white/[0.03] border-white/15 text-[#dbe4ec]
                   ${isCurrentEvent ? 'ring-2 ring-secondary/50 glow' : ''}
                 `}
                 role="listitem"
@@ -494,8 +497,8 @@ export default function CalendarWidget() {
             disabled={loadingSlots}
             className="
               touch-target flex-1 text-center text-xs font-semibold
-              rounded border border-secondary/30 bg-secondary/10 text-secondary
-              hover:bg-secondary/20 disabled:opacity-50 transition-colors
+              rounded border border-[#36b5ce]/35 bg-[#36b5ce]/10 text-[#9fe1ef]
+              hover:bg-[#36b5ce]/18 disabled:opacity-50 transition-colors
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary
             "
             aria-label="Find free slots"
@@ -507,8 +510,8 @@ export default function CalendarWidget() {
             onClick={() => setShowEventModal(true)}
             className="
               touch-target flex-1 text-center text-xs font-semibold
-              rounded border border-green-300/30 bg-green-500/10 text-green-200
-              hover:bg-green-500/20 transition-colors
+              rounded border border-white/15 bg-white/[0.03] text-[#dbe4ec]
+              hover:bg-white/[0.06] transition-colors
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-400
             "
             aria-label="Create new event"
@@ -521,8 +524,8 @@ export default function CalendarWidget() {
           onClick={() => setShowEventModal(true)}
           className="
             touch-target w-full text-center text-xs font-semibold
-            rounded border border-green-300/30 bg-green-500/10 text-green-200
-            hover:bg-green-500/20 transition-colors
+            rounded border border-white/15 bg-white/[0.03] text-[#dbe4ec]
+            hover:bg-white/[0.06] transition-colors
             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-400
           "
           aria-label="Add new event"

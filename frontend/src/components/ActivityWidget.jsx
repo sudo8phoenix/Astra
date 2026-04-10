@@ -22,7 +22,7 @@ export default function ActivityWidget() {
 
       try {
         const [taskPayload, emailPayload] = await Promise.all([
-          apiRequest('/api/v1/tasks?limit=100&offset=0'),
+          apiRequest('/api/v1/tasks?limit=100&skip=0'),
           apiRequest('/api/v1/emails/list?limit=50&offset=0'),
         ])
 
@@ -97,11 +97,11 @@ export default function ActivityWidget() {
   }
 
   return (
-    <article className="glass rounded-xl border border-white/10 p-5">
+    <article className="glass flex h-full min-h-0 flex-col overflow-hidden rounded-2xl p-4">
       {/* Header */}
       <div className="mb-4">
-        <h3 className="text-base font-semibold text-text-primary">Today&apos;s activity</h3>
-        <p className="text-xs text-text-secondary">Performance snapshot across key channels.</p>
+        <h3 className="font-display text-base font-semibold text-[#f6efe1]">Today&apos;s activity</h3>
+        <p className="text-xs text-[#a8bac9]">Performance snapshot across key channels.</p>
       </div>
 
       {error && (
@@ -112,11 +112,11 @@ export default function ActivityWidget() {
 
       {/* Metrics Grid */}
       {isLoading ? (
-        <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center animate-fade-in">
+        <div className="rounded-lg border border-white/15 bg-white/[0.03] px-4 py-5 text-center animate-fade-in">
           <p className="text-sm font-semibold text-text-primary">Loading activity...</p>
         </div>
       ) : metrics.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-white/20 bg-white/5 px-4 py-5 text-center animate-fade-in">
+        <div className="rounded-lg border border-dashed border-white/20 bg-white/[0.03] px-4 py-5 text-center animate-fade-in">
           <p className="text-sm font-semibold text-text-primary">No activity yet</p>
           <p className="mt-1 text-xs text-text-secondary">Metrics will appear as your workday progresses.</p>
         </div>
@@ -134,7 +134,7 @@ export default function ActivityWidget() {
                     {metric.label}
                   </p>
                   <span
-                    className="text-sm font-semibold text-secondary"
+                    className="text-sm font-semibold text-[#9fe1ef]"
                     aria-label={`${metric.value} out of ${metric.max}`}
                   >
                     {metric.value}/{metric.max}
@@ -142,7 +142,7 @@ export default function ActivityWidget() {
                 </div>
 
                 {/* Progress Bar */}
-                <div className="h-2 w-full overflow-hidden rounded-full bg-white/5">
+                <div className="h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
                   <div
                     className={`h-full ${metric.color} transition-all duration-500`}
                     style={{ width: `${percentage}%` }}
@@ -160,11 +160,11 @@ export default function ActivityWidget() {
 
       {/* Summary Stats */}
       <div className="mt-6 pt-4 border-t border-white/10 space-y-2">
-        <p className="text-xs text-text-secondary">
-          <span className="font-semibold text-text-primary">{completedTasks}</span> tasks completed today
+        <p className="text-xs text-[#a8bac9]">
+          <span className="font-semibold text-[#f6efe1]">{completedTasks}</span> tasks completed today
         </p>
-        <p className="text-xs text-text-secondary">
-          <span className="font-semibold text-text-primary">{remainingTasks}</span> tasks remaining, {unreadEmails} unread emails
+        <p className="text-xs text-[#a8bac9]">
+          <span className="font-semibold text-[#f6efe1]">{remainingTasks}</span> tasks remaining, {unreadEmails} unread emails
         </p>
       </div>
 
@@ -173,7 +173,7 @@ export default function ActivityWidget() {
         type="button"
         onClick={openProductivityPage}
         className="
-          touch-target mt-4 w-full text-center text-sm text-secondary hover:text-secondary/80
+          touch-target mt-4 w-full text-center text-sm text-[#9fe1ef] hover:text-[#b8edf8]
           py-2 rounded transition-colors focus-visible:outline-none
           focus-visible:ring-2 focus-visible:ring-secondary
         "

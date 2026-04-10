@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
 import { apiRequest } from '../lib/apiClient'
+import {
+  extractArray,
+  normalizeCalendarEventResponse,
+  normalizeEmailListResponse,
+  normalizeTaskListResponse,
+} from '../lib/apiResponse'
 import Modal from './Modal'
 
 /**
@@ -24,18 +30,20 @@ export default function DashboardModal({ isOpen, onClose }) {
       setLoading(true)
       setError('')
       try {
-        // Try to fetch stats from API endpoints
+        // Pull from canonical backend endpoints and normalize each payload shape.
         const [messagesRes, tasksRes, calendarRes, approvalsRes] = await Promise.allSettled([
-          apiRequest('/api/v1/emailManagement/emails', { method: 'GET' }).catch(() => []),
-          apiRequest('/api/v1/tasks', { method: 'GET' }).catch(() => []),
-          apiRequest('/api/v1/calendar/events', { method: 'GET' }).catch(() => []),
-          apiRequest('/api/v1/approvals', { method: 'GET' }).catch(() => []),
+          apiRequest('/api/v1/emails/list?limit=100&offset=0', { method: 'GET' }).catch(() => []),
+          apiRequest('/api/v1/tasks?limit=100&skip=0', { method: 'GET' }).catch(() => []),
+          apiRequest('/api/v1/calendar/events?limit=100&skip=0', { method: 'GET' }).catch(() => []),
+          apiRequest('/api/v1/approvals/pending?limit=100&offset=0', { method: 'GET' }).catch(() => []),
         ])
 
-        const messages = messagesRes.status === 'fulfilled' ? (Array.isArray(messagesRes.value) ? messagesRes.value : []) : []
-        const tasks = tasksRes.status === 'fulfilled' ? (Array.isArray(tasksRes.value) ? tasksRes.value : []) : []
-        const events = calendarRes.status === 'fulfilled' ? (Array.isArray(calendarRes.value) ? calendarRes.value : []) : []
-        const approvals = approvalsRes.status === 'fulfilled' ? (Array.isArray(approvalsRes.value) ? approvalsRes.value : []) : []
+        const messages = messagesRes.status === 'fulfilled' ? normalizeEmailListResponse(messagesRes.value) : []
+        const tasks = tasksRes.status === 'fulfilled' ? normalizeTaskListResponse(tasksRes.value) : []
+        const events = calendarRes.status === 'fulfilled' ? normalizeCalendarEventResponse(calendarRes.value) : []
+        const approvals = approvalsRes.status === 'fulfilled'
+          ? extractArray(approvalsRes.value, ['approvals', 'data.approvals'])
+          : []
 
         setStats({
           totalMessages: messages.length,

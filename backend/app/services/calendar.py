@@ -527,10 +527,10 @@ class GoogleCalendarService:
         parsed_start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
         parsed_end = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
 
-        # For all-day events, Google uses an exclusive end date (points to start of next day)
-        # Adjust to make end_time inclusive (end of the actual event day) by subtracting 1 day
-        if is_all_day and parsed_end > parsed_start:
-            parsed_end = parsed_end - timedelta(days=1)
+        # Keep Google all-day semantics (exclusive end boundary at next day start).
+        # This preserves start_time < end_time for one-day all-day events.
+        if is_all_day and parsed_end <= parsed_start:
+            parsed_end = parsed_start + timedelta(days=1)
 
         return {
             "google_event_id": google_event.get("id"),

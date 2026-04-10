@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useModal } from '../lib/ModalContext'
 import { apiRequest } from '../lib/apiClient'
 import { ASSISTANT_NAME } from '../lib/branding'
+import { normalizeProfileResponse } from '../lib/apiResponse'
 
 /**
  * Top Navigation Bar Component
@@ -23,16 +24,12 @@ export default function TopNav({ onLogout, onNavigate }) {
     const loadProfileSummary = async () => {
       try {
         const response = await apiRequest('/api/v1/users/profile', { method: 'GET' })
-        const data = response?.profile
-        if (!mounted || !data) {
+        const data = normalizeProfileResponse(response)
+        if (!mounted) {
           return
         }
 
-        setProfile({
-          name: data.name || 'User',
-          role: data.role || '',
-          organization: data.organization || '',
-        })
+        setProfile(data)
       } catch {
         // Keep defaults if profile endpoint is unavailable.
       }
@@ -70,29 +67,29 @@ export default function TopNav({ onLogout, onNavigate }) {
   }
 
   return (
-    <nav className="sticky top-0 z-20 border-b border-white/10 bg-background-DEFAULT/80 backdrop-blur-md">
-      <div className="max-w-full px-4 md:px-6 py-3">
+    <nav className="sticky top-0 z-20 border-b border-white/10 bg-[#0b1324]/78 backdrop-blur-xl">
+      <div className="max-w-full px-4 py-3 md:px-6">
         <div className="flex items-center justify-between gap-4">
           {/* Logo */}
           <div className="flex items-center gap-3 min-w-fit">
-            <div className="h-9 w-9 rounded-lg gradient-primary flex items-center justify-center shadow-glow flex-shrink-0">
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-2xl border border-white/15 gradient-primary shadow-[0_12px_32px_rgba(2,6,23,0.35)]">
               <span className="text-white font-bold text-base glow">🧠</span>
             </div>
             <div className="hidden sm:block">
-              <h1 className="text-sm font-bold text-text-primary">{ASSISTANT_NAME}</h1>
-              <p className="text-xs text-text-secondary">AI Assistant</p>
+              <h1 className="text-sm font-bold text-[#f6efe1]">{ASSISTANT_NAME}</h1>
+              <p className="text-xs text-[#9eb2c3]">AI Assistant</p>
             </div>
           </div>
 
           {/* Navigation Buttons */}
-          <div className="flex items-center gap-2 flex-1 max-w-2xl overflow-x-auto px-2">
+          <div className="flex flex-1 items-center justify-center gap-2 overflow-x-auto px-2 max-w-2xl">
             {navItems.map((item) => (
               <button
                 key={item.id}
                 onClick={() => handleNavigation(item)}
                 className="
-                  touch-target flex-shrink-0 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium
-                  text-text-secondary hover:text-text-primary hover:bg-white/5
+                  touch-target flex-shrink-0 flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium
+                  text-[#b5c5d3] hover:border-white/20 hover:bg-white/[0.06] hover:text-[#f6efe1]
                   transition-all duration-200 whitespace-nowrap
                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary
                 "
@@ -110,17 +107,16 @@ export default function TopNav({ onLogout, onNavigate }) {
               type="button"
               onClick={() => openModal('profile')}
               className="
-                touch-target hidden sm:flex items-center gap-2 px-3 py-2 rounded-lg
-                text-text-secondary hover:text-text-primary hover:bg-white/5
+                touch-target hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-text-secondary hover:border-white/20 hover:bg-white/[0.06] hover:text-text-primary sm:flex
                 transition-all duration-200
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary
               "
               aria-label="User profile"
             >
-              <div className="w-6 h-6 rounded-full bg-gradient-primary glow flex-shrink-0" />
+              <div className="h-6 w-6 flex-shrink-0 rounded-full bg-gradient-primary glow" />
               <div className="text-left">
-                <p className="text-xs font-medium text-text-primary">{profile.name}</p>
-                <p className="text-xs text-text-secondary">
+                <p className="text-xs font-medium text-[#f6efe1]">{profile.name}</p>
+                <p className="text-xs text-[#9eb2c3]">
                   {profile.role || profile.organization || 'Set profile'}
                 </p>
               </div>
@@ -131,8 +127,8 @@ export default function TopNav({ onLogout, onNavigate }) {
               onClick={handleLogout}
               className="
                 touch-target px-3 py-2 rounded-lg text-xs font-semibold
-                border border-red-300/30 bg-red-500/10 text-red-200
-                hover:bg-red-500/20 hover:text-red-100
+                border border-white/15 bg-white/[0.03] text-[#f2c6b7]
+                hover:border-[#f66635]/45 hover:bg-[#f66635]/12 hover:text-[#ffd9cc]
                 transition-all duration-200
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400
               "

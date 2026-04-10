@@ -9,7 +9,8 @@ import sys
 # Add the backend directory to the path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.db.config import Base, DatabaseSettings
+from app.core.config import settings
+from app.db.config import Base
 
 # this is the Alembic Config object
 config = context.config
@@ -18,9 +19,8 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# set the sqlalchemy.url from environment
-db_settings = DatabaseSettings()
-config.set_main_option("sqlalchemy.url", db_settings.database_url)
+# set the sqlalchemy.url from unified app settings
+config.set_main_option("sqlalchemy.url", settings.database_url)
 
 # add your model's MetaData object here
 # for 'autogenerate' support
@@ -61,7 +61,7 @@ def run_migrations_online() -> None:
 
     """
     configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = db_settings.database_url
+    configuration["sqlalchemy.url"] = settings.database_url
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",

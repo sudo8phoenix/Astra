@@ -1,54 +1,40 @@
 """Database configuration and session management."""
 
+from typing import Generator
+
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import QueuePool
-from pydantic_settings import BaseSettings
-from typing import Generator
-import os
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import QueuePool, StaticPool
+
+from app.core.config import settings
 
 # Declare the base class for all models
 Base = declarative_base()
 
 
-class DatabaseSettings(BaseSettings):
-    """Database configuration from environment variables."""
-
-    DB_HOST: str = os.getenv("DB_HOST", "localhost")
-    DB_PORT: int = int(os.getenv("DB_PORT", 5432))
-    DB_USER: str = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "postgres")
-    DB_NAME: str = os.getenv("DB_NAME", "ai_assistant")
-    SQLALCHEMY_POOL_SIZE: int = 20
-    SQLALCHEMY_POOL_RECYCLE: int = 3600
-    SQLALCHEMY_POOL_PRE_PING: bool = True
-
-    class Config:
-        env_file = ".env"
-
-    @property
-    def database_url(self) -> str:
-        """Construct PostgreSQL connection URL."""
-        return (
-            f"postgresql+psycopg2://{self.DB_USER}:{self.DB_PASSWORD}"
-            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+def _build_engine():
+    database_url = settings.database_url
+    if database_url.startswith("sqlite"):
+        return create_engine(
+            database_url,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            echo=settings.db_echo,
         )
 
+    return create_engine(
+        database_url,
+        poolclass=QueuePool,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_recycle=settings.db_pool_recycle,
+        pool_pre_ping=True,
+        echo=settings.db_echo,
+    )
 
-# Initialize settings
-db_settings = DatabaseSettings()
 
-# Create engine
-engine = create_engine(
-    db_settings.database_url,
-    poolclass=QueuePool,
-    pool_size=db_settings.SQLALCHEMY_POOL_SIZE,
-    max_overflow=10,
-    pool_recycle=db_settings.SQLALCHEMY_POOL_RECYCLE,
-    pool_pre_ping=db_settings.SQLALCHEMY_POOL_PRE_PING,
-    echo=False,  # Set to True for SQL debugging
-)
+engine = _build_engine()
 
 # Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

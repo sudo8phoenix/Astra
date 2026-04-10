@@ -272,7 +272,7 @@ class GmailClient:
                     },
                 )
                 raise GmailInsufficientScopeError(
-                    "Gmail account is missing required modify permissions"
+                    "Gmail permissions are insufficient. Reconnect your Google account and grant Gmail modify access."
                 ) from root_error
 
             logger.error(
@@ -575,7 +575,7 @@ class GmailClient:
             return True
         except GmailInsufficientScopeError as error:
             logger.warning(f"Skipping important mark due to missing Gmail scope: {error}")
-            return False
+            raise
         except RetryExhaustedError as error:
             logger.error(f"Error marking message as important after retries: {error}")
             return False

@@ -21,6 +21,13 @@ from app.db.models import User
 logger = logging.getLogger(__name__)
 
 SERPAPI_URL = "https://serpapi.com/search.json"
+DEFAULT_FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    )
+}
 
 
 def _normalize_search_query(query: str) -> str:
@@ -56,6 +63,75 @@ def _result_quality_score(item: dict[str, Any], query_tokens: set[str]) -> float
     if any(host.endswith(domain) for domain in ["wikipedia.org", "github.com", "stackoverflow.com", "docs.python.org"]):
         score += 0.15
     return score
+
+
+def _extract_meta_description(html: str) -> str:
+    match = re.search(
+        r'<meta[^>]+(?:name|property)=["\'](?:description|og:description)["\'][^>]+content=["\']([^"\']+)["\']',
+        html,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", match.group(1)).strip()
+
+
+def _extract_visible_text(html: str) -> str:
+    content = re.sub(r"<script[^>]*>.*?</script>", " ", html, flags=re.IGNORECASE | re.DOTALL)
+    content = re.sub(r"<style[^>]*>.*?</style>", " ", content, flags=re.IGNORECASE | re.DOTALL)
+    content = re.sub(r"<noscript[^>]*>.*?</noscript>", " ", content, flags=re.IGNORECASE | re.DOTALL)
+    content = re.sub(r"<[^>]+>", " ", content)
+    content = re.sub(r"&nbsp;|&#160;", " ", content, flags=re.IGNORECASE)
+    content = re.sub(r"&amp;", "&", content, flags=re.IGNORECASE)
+    content = re.sub(r"\s+", " ", content)
+    return content.strip()
+
+
+def _fetch_page_summary(link: str) -> str:
+    if not link.startswith("http"):
+        return ""
+
+    try:
+        response = httpx.get(
+            link,
+            timeout=6.0,
+            follow_redirects=True,
+            headers=DEFAULT_FETCH_HEADERS,
+        )
+        response.raise_for_status()
+    except Exception:
+        return ""
+
+    content_type = str(response.headers.get("content-type") or "").lower()
+    if "html" not in content_type and "xml" not in content_type:
+        return ""
+
+    html = response.text[:120_000]
+    meta_description = _extract_meta_description(html)
+    visible_text = _extract_visible_text(html)
+
+    if meta_description and len(meta_description) >= 60:
+        return meta_description[:420]
+
+    if not visible_text:
+        return ""
+
+    return visible_text[:420]
+
+
+def _enrich_results_with_page_summaries(results: list[dict[str, Any]], limit: int = 2) -> list[dict[str, Any]]:
+    if not results:
+        return []
+
+    enriched: list[dict[str, Any]] = []
+    for idx, item in enumerate(results):
+        normalized = dict(item)
+        if idx < limit:
+            summary = _fetch_page_summary(str(item.get("link") or "")).strip()
+            if summary:
+                normalized["page_summary"] = summary
+        enriched.append(normalized)
+    return enriched
 
 
 def _dedupe_and_rank_results(raw_results: list[dict[str, Any]], query: str, result_count: int) -> list[dict[str, Any]]:
@@ -172,11 +248,13 @@ def create_search_tools(db: Session):
                     "duration_ms": round(duration_ms, 2),
                 },
             )
+            enriched_results = _enrich_results_with_page_summaries(ranked_results)
+
             return {
                 "status": "success",
                 "query": normalized_query,
-                "count": len(ranked_results),
-                "results": ranked_results,
+                "count": len(enriched_results),
+                "results": enriched_results,
                 "saved_note": saved_note,
             }
 
@@ -290,8 +368,57 @@ def create_search_tools(db: Session):
             )
             return {"status": "failed", "error": str(exc)}
 
+    def summarize_search_result(
+        user_id: str,
+        link: str,
+        query: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        start = perf_counter()
+        trace_id = get_trace_id() or "N/A"
+
+        try:
+            normalized_link = str(link or "").strip()
+            if not normalized_link.startswith("http"):
+                return {"status": "failed", "error": "A valid http/https link is required."}
+
+            summary = _fetch_page_summary(normalized_link)
+            if not summary:
+                return {
+                    "status": "failed",
+                    "error": "I could not extract readable content from that page.",
+                    "link": normalized_link,
+                }
+
+            duration_ms = (perf_counter() - start) * 1000
+            metrics_collector.record_agent_step("tool.summarize_search_result", "success", duration_ms)
+            logger.info(
+                "tool.summarize_search_result.success",
+                extra={
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                    "link": normalized_link,
+                    "duration_ms": round(duration_ms, 2),
+                },
+            )
+            return {
+                "status": "success",
+                "query": (query or "").strip() or None,
+                "link": normalized_link,
+                "summary": summary,
+            }
+        except Exception as exc:
+            duration_ms = (perf_counter() - start) * 1000
+            metrics_collector.record_agent_step("tool.summarize_search_result", "error", duration_ms)
+            logger.error(
+                "tool.summarize_search_result.error",
+                extra={"trace_id": trace_id, "user_id": user_id, "duration_ms": round(duration_ms, 2)},
+                exc_info=True,
+            )
+            return {"status": "failed", "error": str(exc)}
+
     return {
         "serp_search": serp_search,
+        "summarize_search_result": summarize_search_result,
         "save_search_note": save_search_note,
         "list_search_notes": list_search_notes,
     }

@@ -6,9 +6,10 @@ import json
 import inspect
 import logging
 import re
+from types import UnionType
 from datetime import datetime, timedelta
 from time import perf_counter
-from typing import Any
+from typing import Any, Union, get_args, get_origin
 from uuid import uuid4
 
 from langchain_groq import ChatGroq
@@ -44,6 +45,24 @@ logger = logging.getLogger(__name__)
 
 class AgentOrchestrator:
     """Lightweight orchestrator implementing planner, router and tool execution."""
+
+    _LATEST_EMAIL_ALIASES = {
+        "latest",
+        "recent",
+        "newest",
+        "last",
+        "latest email",
+        "most recent",
+        "most recent email",
+        "last email",
+    }
+    _URGENT_EMAIL_ALIASES = {
+        "urgent",
+        "most urgent",
+        "critical",
+        "important",
+        "priority",
+    }
 
     def __init__(self, db: Session):
         self.db = db
@@ -161,6 +180,7 @@ class AgentOrchestrator:
             "create_event",
             "generate_daily_plan",
             "serp_search",
+            "summarize_search_result",
             "save_search_note",
             "list_search_notes",
         ]
@@ -172,7 +192,7 @@ class AgentOrchestrator:
             "- User wants to review/send emails: INTENT = email operations\n"
             "- User wants to check calendar/see free slots/schedule meeting: INTENT = calendar operations\n"
             "- User wants to create/update/complete tasks: INTENT = task management\n"
-            "- User wants web research or to search Google: INTENT = web search operations\n"
+            "- User wants web research, to search Google, or to summarize/extract info from a URL: INTENT = web search operations\n"
             "- User needs help planning/organizing: INTENT = planning\n"
             "- Otherwise: INTENT = conversational response\n\n"
             "Return ONLY valid JSON with this schema:\n"
@@ -271,7 +291,10 @@ class AgentOrchestrator:
             tool_name = requirement.tool_name
             params = dict(requirement.parameters)
 
-            if params.get("email_id") == "latest":
+            if tool_name == "generate_draft_reply":
+                params = self._normalize_generate_draft_params(params=params, tools=tools, user=user)
+
+            if str(params.get("email_id") or "").strip().lower() in self._LATEST_EMAIL_ALIASES:
                 latest_raw = tools["fetch_latest_emails"](user_id=user.id, limit=1)
                 latest = self._normalize_tool_result("fetch_latest_emails", latest_raw)
                 emails = latest.get("emails", []) if isinstance(latest.get("emails", []), list) else []
@@ -301,7 +324,8 @@ class AgentOrchestrator:
                         params=params,
                         user_message=state.user_input.content,
                     )
-                    safe_params = self._sanitize_tool_params(tool_fn=tool_fn, params=enriched_params)
+                    coerced_params = self._coerce_tool_params(tool_fn=tool_fn, params=enriched_params)
+                    safe_params = self._sanitize_tool_params(tool_fn=tool_fn, params=coerced_params)
                     missing_required = self._find_missing_required_params(tool_fn=tool_fn, params=safe_params)
                     if missing_required:
                         result = {
@@ -368,6 +392,142 @@ class AgentOrchestrator:
         return {key: value for key, value in sanitized_params.items() if key in allowed_keys}
 
     @staticmethod
+    def _coerce_tool_params(tool_fn: Any, params: dict[str, Any]) -> dict[str, Any]:
+        """Coerce planner-provided params into tool signature-compatible values."""
+        if not isinstance(params, dict):
+            return {}
+
+        try:
+            signature = inspect.signature(tool_fn)
+        except (TypeError, ValueError):
+            return dict(params)
+
+        coerced = dict(params)
+        for name, param in signature.parameters.items():
+            if name == "user_id" or name not in coerced:
+                continue
+
+            value = coerced.get(name)
+            annotation = param.annotation
+            normalized_value = AgentOrchestrator._coerce_value_for_annotation(annotation=annotation, value=value)
+            coerced[name] = normalized_value
+
+        return coerced
+
+    @staticmethod
+    def _coerce_value_for_annotation(annotation: Any, value: Any) -> Any:
+        if value is None or annotation is inspect._empty:
+            return value
+
+        origin = get_origin(annotation)
+        args = get_args(annotation)
+
+        if origin is None:
+            target = annotation
+            if target is bool:
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    lowered = value.strip().lower()
+                    if lowered in {"true", "1", "yes", "y"}:
+                        return True
+                    if lowered in {"false", "0", "no", "n"}:
+                        return False
+                if isinstance(value, (int, float)):
+                    return bool(value)
+                return value
+
+            if target is int:
+                if isinstance(value, int):
+                    return value
+                if isinstance(value, float):
+                    return int(value)
+                if isinstance(value, str):
+                    text = value.strip()
+                    if text.isdigit() or (text.startswith("-") and text[1:].isdigit()):
+                        return int(text)
+                return value
+
+            if target is float:
+                if isinstance(value, (int, float)):
+                    return float(value)
+                if isinstance(value, str):
+                    try:
+                        return float(value.strip())
+                    except Exception:
+                        return value
+                return value
+
+            if target is str:
+                return str(value).strip() if not isinstance(value, str) else value.strip()
+
+            return value
+
+        if origin in {list, tuple}:
+            if isinstance(value, str):
+                split = [item.strip() for item in value.split(",") if item.strip()]
+                return split
+            if isinstance(value, (list, tuple)):
+                return list(value)
+            return value
+
+        if origin is dict:
+            return value if isinstance(value, dict) else value
+
+        if origin is type(None):
+            return value
+
+        # Handle Optional[...] / Union[..., None]
+        if origin in {Union, UnionType}:
+            non_none_args = [arg for arg in args if arg is not type(None)]
+            for candidate in non_none_args:
+                candidate_value = AgentOrchestrator._coerce_value_for_annotation(candidate, value)
+                if candidate_value is not value:
+                    return candidate_value
+            return value
+
+        return value
+
+    def _normalize_generate_draft_params(self, params: dict[str, Any], tools: dict[str, Any], user: User) -> dict[str, Any]:
+        normalized = dict(params or {})
+        email_ref = str(normalized.get("email_id") or "").strip().lower()
+        if not email_ref:
+            return normalized
+
+        if email_ref in self._URGENT_EMAIL_ALIASES:
+            urgent_raw = tools["check_urgent_emails"](user_id=user.id)
+            urgent_result = self._normalize_tool_result("check_urgent_emails", urgent_raw)
+            urgent_items = urgent_result.get("urgent_emails")
+            if isinstance(urgent_items, list) and urgent_items:
+                urgent_id = urgent_items[0].get("id")
+                if urgent_id:
+                    normalized["email_id"] = urgent_id
+                    return normalized
+
+            latest_raw = tools["fetch_latest_emails"](user_id=user.id, limit=1)
+            latest_result = self._normalize_tool_result("fetch_latest_emails", latest_raw)
+            latest_items = latest_result.get("emails")
+            if isinstance(latest_items, list) and latest_items:
+                latest_id = latest_items[0].get("id")
+                if latest_id:
+                    normalized["email_id"] = latest_id
+                    return normalized
+
+        if email_ref in self._LATEST_EMAIL_ALIASES:
+            normalized["email_id"] = "latest"
+
+        tone = normalized.get("tone")
+        if isinstance(tone, str):
+            cleaned_tone = tone.strip().lower()
+            allowed_tones = {"professional", "casual", "formal", "friendly"}
+            if cleaned_tone and cleaned_tone not in allowed_tones:
+                cleaned_tone = "professional"
+            if cleaned_tone:
+                normalized["tone"] = cleaned_tone
+
+        return normalized
+
+    @staticmethod
     def _find_missing_required_params(tool_fn: Any, params: dict[str, Any]) -> list[str]:
         """Return required keyword parameters that are not present or empty."""
         try:
@@ -417,8 +577,21 @@ class AgentOrchestrator:
             return {}
 
         enriched = dict(params)
+        if tool_name == "summarize_search_result":
+            link = str(enriched.get("link") or "").strip()
+            if not link:
+                message = user_message or ""
+                extracted_link = AgentOrchestrator._extract_first_url(message)
+                if extracted_link:
+                    enriched["link"] = extracted_link
+            return enriched
+
         if tool_name != "create_event":
             return enriched
+
+        attendees = enriched.get("attendees")
+        if isinstance(attendees, str):
+            enriched["attendees"] = [item.strip() for item in attendees.split(",") if item.strip()]
 
         message = (user_message or "").lower()
         normalized_time_hint = str(enriched.get("time") or "").strip().lower()
@@ -481,6 +654,17 @@ class AgentOrchestrator:
             if normalized:
                 return normalized
 
+        slash_or_dash = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b", message)
+        if slash_or_dash:
+            normalized = AgentOrchestrator._normalize_date_string(slash_or_dash.group(1))
+            if normalized:
+                return normalized
+
+        if "tomorrow" in message:
+            return (datetime.utcnow().date() + timedelta(days=1)).isoformat()
+        if "today" in message:
+            return datetime.utcnow().date().isoformat()
+
         return None
 
     @staticmethod
@@ -489,11 +673,78 @@ class AgentOrchestrator:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
             return parsed.date().isoformat()
         except Exception:
+            raw = (value or "").strip()
+            for fmt in ("%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%d/%m/%y", "%m-%d-%Y", "%d-%m-%Y"):
+                try:
+                    parsed = datetime.strptime(raw, fmt)
+                    return parsed.date().isoformat()
+                except Exception:
+                    continue
             try:
                 parsed = datetime.fromisoformat(value.strip().split("T")[0])
                 return parsed.date().isoformat()
             except Exception:
                 return None
+
+    @staticmethod
+    def _extract_first_url(message: str) -> str | None:
+        match = re.search(r"https?://[^\s)\]>\"']+", message or "")
+        if not match:
+            return None
+        return match.group(0).strip()
+
+    @staticmethod
+    def _format_slot_range(start: str, end: str) -> str:
+        start_dt = AgentOrchestrator._parse_iso_datetime(start)
+        end_dt = AgentOrchestrator._parse_iso_datetime(end)
+        if not start_dt or not end_dt:
+            return f"{start} to {end}"
+
+        start_day = start_dt.strftime("%b %d, %Y").replace(" 0", " ")
+        start_time = start_dt.strftime("%I:%M %p").lstrip("0")
+        end_time = end_dt.strftime("%I:%M %p").lstrip("0")
+
+        if start_dt.date() == end_dt.date():
+            return f"{start_day}, {start_time} to {end_time}"
+
+        end_day = end_dt.strftime("%b %d, %Y").replace(" 0", " ")
+        return f"{start_day}, {start_time} to {end_day}, {end_time}"
+
+    @staticmethod
+    def _parse_iso_datetime(value: str) -> datetime | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _format_task_due_date(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        due_dt = AgentOrchestrator._parse_iso_datetime(str(value))
+        if due_dt:
+            return due_dt.strftime("%b %d, %Y").replace(" 0", " ")
+        return str(value)
+
+    @staticmethod
+    def _format_task_explanation(task: dict[str, Any], index: int) -> str:
+        title = str(task.get("title") or "Untitled task").strip()
+        priority = str(task.get("priority") or "medium").strip().lower()
+        status = str(task.get("status") or "todo").strip().lower()
+        due_text = AgentOrchestrator._format_task_due_date(task.get("due_date"))
+        description = str(task.get("description") or "").strip()
+
+        summary_bits = [f"{priority} priority", status]
+        if due_text:
+            summary_bits.append(f"due {due_text}")
+
+        explanation = f"{index}. {title} ({', '.join(summary_bits)})"
+        if description:
+            trimmed = f"{description[:160]}..." if len(description) > 160 else description
+            explanation += f" - {trimmed}"
+        return explanation
 
     @staticmethod
     def _normalize_tool_result(tool_name: str, raw_result: Any) -> dict[str, Any]:
@@ -681,7 +932,7 @@ class AgentOrchestrator:
                         start = str(slot.get("start_time", ""))
                         end = str(slot.get("end_time", ""))
                         if start and end:
-                            preview.append(f"{start} to {end}")
+                            preview.append(self._format_slot_range(start, end))
                     suffix = f" First slots: {', '.join(preview)}." if preview else ""
                     message = f"I found {count} free slot(s).{suffix}"
             elif first.tool_name == "create_task":
@@ -691,8 +942,28 @@ class AgentOrchestrator:
                 priority = task.get("priority") or "medium"
                 message = f"Added task '{title}' with {priority} priority ({status})."
             elif first.tool_name == "list_tasks":
-                count = (first.result or {}).get("count", 0)
-                message = f"I found {count} task(s)."
+                result = first.result or {}
+                count = int(result.get("count") or 0)
+                tasks = result.get("tasks") if isinstance(result.get("tasks"), list) else []
+                if count == 0:
+                    message = (
+                        "I did not find any tasks right now. "
+                        "Would you like me to add one, or help with something else?"
+                    )
+                else:
+                    explanations = [
+                        self._format_task_explanation(task, idx)
+                        for idx, task in enumerate(tasks[:5], start=1)
+                        if isinstance(task, dict)
+                    ]
+
+                    message = f"I found {count} task(s)."
+                    if explanations:
+                        message += "\n\nHere is what those tasks are:\n" + "\n".join(explanations)
+                    overflow = count - len(explanations)
+                    if overflow > 0:
+                        message += f"\n...and {overflow} more."
+                    message += "\n\nWould you like me to add any other tasks, or help with something else?"
             elif first.tool_name == "check_urgent_emails":
                 urgent_count = (first.result or {}).get("urgent_count", 0)
                 message = f"I checked your inbox and found {urgent_count} urgent email(s)."
@@ -728,10 +999,27 @@ class AgentOrchestrator:
                         title = str(item.get("title") or "Untitled result")
                         link = str(item.get("link") or "")
                         preview.append(f"{title} ({link})" if link else title)
+                    findings = []
+                    for idx, item in enumerate(top_results[:2], start=1):
+                        title = str(item.get("title") or f"Result {idx}")
+                        extracted = str(item.get("page_summary") or item.get("snippet") or "").strip()
+                        if extracted:
+                            findings.append(f"{idx}. {title}: {extracted[:280]}")
+
                     message = (
                         f"I found {count} Google result(s) for '{query}'. "
                         f"Top results: {'; '.join(preview)}"
                     )
+                    if findings:
+                        message += "\n\nWhat those pages say:\n" + "\n".join(findings)
+            elif first.tool_name == "summarize_search_result":
+                result = first.result or {}
+                link = str(result.get("link") or "that link")
+                summary = str(result.get("summary") or "").strip()
+                if summary:
+                    message = f"Here is what I found in {link}:\n\n{summary}"
+                else:
+                    message = f"I could not extract useful content from {link}."
             elif first.tool_name == "save_search_note":
                 note = (first.result or {}).get("note") or {}
                 query = note.get("query") or "your search"

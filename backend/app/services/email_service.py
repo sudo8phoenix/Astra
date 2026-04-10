@@ -44,7 +44,7 @@ class EmailService:
     def __init__(self, db: Session):
         """Initialize email service."""
         self.db = db
-        self.oauth_manager = GmailOAuthManager()
+        self.oauth_manager: GmailOAuthManager | None = None
         self.llm = ChatGroq(
             model=settings.groq_execution_model,
             temperature=settings.llm_temperature,
@@ -98,6 +98,19 @@ class EmailService:
                 "threshold_exceeded": usage_state["threshold_exceeded"],
             },
         )
+
+    def _get_oauth_manager(self) -> Optional[GmailOAuthManager]:
+        """Lazily initialize Gmail OAuth support when credentials are available."""
+        if self.oauth_manager is not None:
+            return self.oauth_manager
+
+        try:
+            self.oauth_manager = GmailOAuthManager()
+        except ValueError as error:
+            logger.warning("Gmail OAuth manager unavailable: %s", error)
+            return None
+
+        return self.oauth_manager
     
     def get_oauth_auth_url(self, state: str = "") -> str:
         """
@@ -109,7 +122,11 @@ class EmailService:
         Returns:
             Authorization URL to redirect user to
         """
-        auth_url = self.oauth_manager.get_auth_url(state=state)
+        oauth_manager = self._get_oauth_manager()
+        if not oauth_manager:
+            raise ValueError("Google OAuth credentials not configured in settings")
+
+        auth_url = oauth_manager.get_auth_url(state=state)
         return auth_url
     
     def connect_gmail_account(self, user: User, auth_code: str) -> bool:
@@ -124,7 +141,11 @@ class EmailService:
             True if connection successful, False otherwise
         """
         try:
-            token_response = self.oauth_manager.exchange_code_for_token(auth_code)
+            oauth_manager = self._get_oauth_manager()
+            if not oauth_manager:
+                return False
+
+            token_response = oauth_manager.exchange_code_for_token(auth_code)
 
             # Reassign JSON preferences to ensure SQLAlchemy persists updates.
             preferences = dict(user.preferences or {})
@@ -193,7 +214,11 @@ class EmailService:
         if _is_expiring(expires_at):
             if refresh_token:
                 try:
-                    new_token_response = self.oauth_manager.refresh_access_token(refresh_token)
+                    oauth_manager = self._get_oauth_manager()
+                    if not oauth_manager:
+                        return None
+
+                    new_token_response = oauth_manager.refresh_access_token(refresh_token)
                     preferences["gmail_access_token"] = new_token_response["access_token"]
                     preferences["gmail_token_expires_at"] = new_token_response["expires_at"]
                     user.preferences = preferences
@@ -311,6 +336,13 @@ class EmailService:
                 if gmail_client:
                     try:
                         gmail_client.mark_as_important(email_data["id"])
+                    except GmailInsufficientScopeError as mark_error:
+                        logger.warning(
+                            "Skipping important mark for user %s message %s due to missing Gmail scope: %s",
+                            user.id,
+                            email_data.get("id"),
+                            mark_error,
+                        )
                     except Exception as mark_error:
                         logger.warning(
                             "Failed to mark email as important for user %s message %s: %s",

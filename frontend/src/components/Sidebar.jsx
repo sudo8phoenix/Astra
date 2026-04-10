@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useModal } from '../lib/ModalContext'
 import { apiRequest } from '../lib/apiClient'
 import { ASSISTANT_NAME } from '../lib/branding'
+import { normalizeProfileResponse } from '../lib/apiResponse'
 
 /**
  * Sidebar Navigation Component
@@ -24,16 +25,12 @@ export default function Sidebar({ mobileOpen = false, onToggleMobile, onCloseMob
     const loadProfileSummary = async () => {
       try {
         const response = await apiRequest('/api/v1/users/profile', { method: 'GET' })
-        const data = response?.profile
-        if (!mounted || !data) {
+        const data = normalizeProfileResponse(response)
+        if (!mounted) {
           return
         }
 
-        setProfile({
-          name: data.name || 'User',
-          role: data.role || '',
-          organization: data.organization || '',
-        })
+        setProfile(data)
       } catch {
         // Keep defaults if profile endpoint cannot be loaded.
       }

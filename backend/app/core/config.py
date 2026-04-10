@@ -1,4 +1,11 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
+
+
+_CURRENT_FILE = Path(__file__).resolve()
+_BACKEND_ROOT = _CURRENT_FILE.parents[2]
+_WORKSPACE_ROOT = _CURRENT_FILE.parents[3]
 
 
 class Settings(BaseSettings):
@@ -38,6 +45,13 @@ class Settings(BaseSettings):
     redis_cache_url: str = "redis://localhost:6379/1"
     redis_session_ttl: int = 3600
     redis_cache_ttl: int = 1800
+
+    # =====================================================================
+    # WEBSOCKET SETTINGS
+    # =====================================================================
+    websocket_heartbeat_interval_seconds: int = 20
+    websocket_client_timeout_seconds: int = 60
+    websocket_reconnect_delay_ms: int = 2000
 
     # =====================================================================
     # CONVERSATION MEMORY SETTINGS
@@ -150,7 +164,9 @@ class Settings(BaseSettings):
     system_email: str = "noreply@ai-assistant.local"
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Load backend/.env first, then workspace/.env so local backend overrides
+        # are possible while still supporting monorepo-level env files.
+        env_file=(str(_BACKEND_ROOT / ".env"), str(_WORKSPACE_ROOT / ".env")),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -159,6 +175,46 @@ class Settings(BaseSettings):
     def debug(self) -> bool:
         """Backward-compatible alias used by existing middleware."""
         return self.app_debug
+
+    @model_validator(mode="after")
+    def validate_production_security(self):
+        """Fail fast when production starts with insecure defaults."""
+        if self.app_env != "production":
+            return self
+
+        issues: list[str] = []
+
+        insecure_jwt_values = {
+            "",
+            "your-very-secure-secret-key-change-in-production",
+            "change-me",
+            "change_this_in_production",
+            "secret",
+            "test-secret-key-do-not-use-in-production",
+        }
+        if self.jwt_secret_key in insecure_jwt_values or len(self.jwt_secret_key) < 32:
+            issues.append("JWT_SECRET_KEY must be a strong unique secret")
+
+        if self.app_debug:
+            issues.append("APP_DEBUG must be false in production")
+
+        if self.feature_email_management and (
+            not self.google_oauth_client_id or not self.google_oauth_client_secret
+        ):
+            issues.append("Google OAuth credentials are required when email management is enabled")
+
+        if self.feature_calendar_management and (
+            not self.google_oauth_client_id or not self.google_oauth_client_secret
+        ):
+            issues.append("Google OAuth credentials are required when calendar management is enabled")
+
+        if self.allowed_origins == ["*"]:
+            issues.append("CORS wildcard origins are not allowed in production")
+
+        if issues:
+            raise ValueError("Invalid production configuration: " + "; ".join(issues))
+
+        return self
 
 
 settings = Settings()

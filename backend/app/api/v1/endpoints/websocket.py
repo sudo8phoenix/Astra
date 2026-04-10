@@ -8,6 +8,7 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
 from app.core.auth import JWTManager
+from app.core.config import settings
 from app.cache.config import get_redis
 
 logger = logging.getLogger(__name__)
@@ -162,6 +163,20 @@ async def websocket_endpoint(
     # Connect
     await connection_manager.connect(websocket, user_id)
     redis_client = get_redis()
+
+    await websocket.send_json(
+        {
+            "type": "connection:ready",
+            "sequence": connection_manager.get_next_sequence(user_id),
+            "timestamp": datetime.utcnow().isoformat(),
+            "user_id": user_id,
+            "data": {
+                "heartbeat_interval_seconds": settings.websocket_heartbeat_interval_seconds,
+                "client_timeout_seconds": settings.websocket_client_timeout_seconds,
+                "recommended_reconnect_delay_ms": settings.websocket_reconnect_delay_ms,
+            },
+        }
+    )
     
     # Subscribe to approval events in background
     pub_sub = redis_client.pubsub()
@@ -181,6 +196,10 @@ async def websocket_endpoint(
                 
                 if message:
                     try:
+                        message_type = message.get("type")
+                        if message_type != "message":
+                            continue
+
                         payload = message.get("data")
                         if isinstance(payload, bytes):
                             payload = payload.decode("utf-8")
@@ -208,20 +227,60 @@ async def websocket_endpoint(
         finally:
             await asyncio.to_thread(pub_sub.unsubscribe, approval_channel)
             await asyncio.to_thread(pub_sub.close)
+
+    async def emit_heartbeat():
+        """Emit server heartbeats so clients can detect stale sockets and reconnect."""
+        interval = max(5, int(settings.websocket_heartbeat_interval_seconds))
+        while True:
+            await asyncio.sleep(interval)
+            await websocket.send_json(
+                {
+                    "type": "session:heartbeat",
+                    "sequence": connection_manager.get_next_sequence(user_id),
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "user_id": user_id,
+                    "data": {
+                        "interval_seconds": interval,
+                        "recommended_reconnect_delay_ms": settings.websocket_reconnect_delay_ms,
+                    },
+                }
+            )
     
     # Start event listener task
     event_task = asyncio.create_task(listen_for_events())
+    heartbeat_task = asyncio.create_task(emit_heartbeat())
     
     try:
         while True:
             # Receive messages from client
-            data = await websocket.receive_text()
+            timeout_seconds = max(10, int(settings.websocket_client_timeout_seconds))
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                logger.info(
+                    "WebSocket client timed out due to heartbeat inactivity",
+                    extra={"user_id": user_id, "timeout_seconds": timeout_seconds},
+                )
+                await websocket.send_json(
+                    {
+                        "type": "connection:closing",
+                        "sequence": connection_manager.get_next_sequence(user_id),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "user_id": user_id,
+                        "data": {
+                            "reason": "heartbeat_timeout",
+                            "recommended_reconnect_delay_ms": settings.websocket_reconnect_delay_ms,
+                        },
+                    }
+                )
+                await websocket.close(code=status.WS_1001_GOING_AWAY, reason="Heartbeat timeout")
+                break
             
             try:
                 message = json.loads(data)
                 message_type = message.get("type")
                 
-                if message_type == "ping":
+                if message_type in {"ping", "heartbeat"}:
                     # Respond to heartbeat
                     await websocket.send_json({
                         "type": "pong",
@@ -248,4 +307,6 @@ async def websocket_endpoint(
     
     finally:
         event_task.cancel()
+        heartbeat_task.cancel()
+        await asyncio.gather(event_task, heartbeat_task, return_exceptions=True)
         connection_manager.disconnect(websocket, user_id)

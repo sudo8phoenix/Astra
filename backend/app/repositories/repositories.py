@@ -196,8 +196,9 @@ class CalendarEventRepository(BaseRepository[CalendarEvent]):
         return self.session.query(self.model_class).filter(
             and_(
                 self.model_class.user_id == user_id,
-                self.model_class.start_time >= start_date,
-                self.model_class.end_time <= end_date,
+                # Overlap semantics: include events that intersect the range window.
+                self.model_class.start_time < end_date,
+                self.model_class.end_time > start_date,
             )
         ).order_by(self.model_class.start_time).all()
 

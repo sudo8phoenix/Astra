@@ -1,12 +1,12 @@
 """Redis cache configuration and connection."""
 
-import redis
 import json
 import logging
 import time
 from typing import Any, Optional
-from pydantic_settings import BaseSettings
-import os
+
+import redis
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 logger = logging.getLogger(__name__)
@@ -15,24 +15,28 @@ logger = logging.getLogger(__name__)
 class RedisSettings(BaseSettings):
     """Redis connection configuration from environment variables."""
 
-    REDIS_URL: Optional[str] = os.getenv("REDIS_URL", None)
-    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
-    REDIS_PORT: int = int(os.getenv("REDIS_PORT", 6379))
-    REDIS_DB: int = int(os.getenv("REDIS_DB", 0))
-    REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
-    REDIS_SSL: bool = os.getenv("REDIS_SSL", "false").lower() == "true"
-    
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(
+        env_prefix="REDIS_",
+        env_file=(".env", "../.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    url: Optional[str] = None
+    host: str = "localhost"
+    port: int = 6379
+    db: int = 0
+    password: Optional[str] = None
+    ssl: bool = False
 
     @property
     def redis_url(self) -> str:
         """Construct Redis connection URL."""
-        if self.REDIS_URL:
-            return self.REDIS_URL
-        auth = f":{self.REDIS_PASSWORD}@" if self.REDIS_PASSWORD else ""
-        protocol = "rediss" if self.REDIS_SSL else "redis"
-        return f"{protocol}://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+        if self.url:
+            return self.url
+        auth = f":{self.password}@" if self.password else ""
+        protocol = "rediss" if self.ssl else "redis"
+        return f"{protocol}://{auth}{self.host}:{self.port}/{self.db}"
 
 
 # Initialize settings

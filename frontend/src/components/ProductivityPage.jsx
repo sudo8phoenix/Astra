@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiRequest } from '../lib/apiClient'
+import { normalizeEmailListResponse, normalizeTaskListResponse } from '../lib/apiResponse'
 
 export default function ProductivityPage({ onBack }) {
   const [tasks, setTasks] = useState([])
@@ -15,7 +16,7 @@ export default function ProductivityPage({ onBack }) {
       setError('')
       try {
         const [taskPayload, emailPayload] = await Promise.all([
-          apiRequest('/api/v1/tasks?limit=100&offset=0'),
+          apiRequest('/api/v1/tasks?limit=100&skip=0'),
           apiRequest('/api/v1/emails/list?limit=100&offset=0'),
         ])
 
@@ -23,8 +24,8 @@ export default function ProductivityPage({ onBack }) {
           return
         }
 
-        setTasks(Array.isArray(taskPayload?.tasks) ? taskPayload.tasks : [])
-        setEmails(Array.isArray(emailPayload?.emails) ? emailPayload.emails : [])
+        setTasks(normalizeTaskListResponse(taskPayload))
+        setEmails(normalizeEmailListResponse(emailPayload))
       } catch (requestError) {
         if (!active) {
           return

@@ -442,7 +442,14 @@ async def get_urgent_emails(
     gmail_client = service.get_gmail_client(current_user)
     for email in critical_priority + high_priority:
         if gmail_client:
-            gmail_client.mark_as_important(email["id"])
+            try:
+                gmail_client.mark_as_important(email["id"])
+            except GmailInsufficientScopeError:
+                logger.warning(
+                    "gmail.modify.permission_missing user=%s email_id=%s",
+                    current_user.id,
+                    email["id"],
+                )
         
         # Mark as urgent in DB
         repo.mark_as_urgent(email["id"])
@@ -481,7 +488,16 @@ async def mark_email_urgent(
     # Mark in Gmail
     gmail_client = service.get_gmail_client(current_user)
     if gmail_client:
-        success = gmail_client.mark_as_important(email_id)
+        try:
+            success = gmail_client.mark_as_important(email_id)
+        except GmailInsufficientScopeError:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Gmail permissions are insufficient to modify messages. "
+                    "Please reconnect Google account and grant modify access."
+                ),
+            )
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -599,7 +615,7 @@ async def archive_email(
     
     try:
         # Remove from INBOX
-        success = gmail_client._execute_with_retry(
+        gmail_client._execute_with_retry(
             "archive_email",
             lambda: gmail_client.service.users().messages().modify(
                 userId="me",
@@ -651,7 +667,7 @@ async def delete_email(
     
     try:
         # Move to trash
-        success = gmail_client._execute_with_retry(
+        gmail_client._execute_with_retry(
             "delete_email",
             lambda: gmail_client.service.users().messages().trash(
                 userId="me",
@@ -707,7 +723,7 @@ async def snooze_email(
     
     try:
         # Remove from INBOX (snooze = temporarily archive)
-        success = gmail_client._execute_with_retry(
+        gmail_client._execute_with_retry(
             "snooze_email",
             lambda: gmail_client.service.users().messages().modify(
                 userId="me",

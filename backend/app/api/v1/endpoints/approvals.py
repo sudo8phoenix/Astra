@@ -153,6 +153,52 @@ async def execute_approved_action(
     return execution_result
 
 
+async def expire_stale_user_approvals(
+    db: Session,
+    redis_client,
+    user_id: str,
+    trace_id: str,
+) -> int:
+    """Mark stale pending approvals as expired for this user and emit events."""
+    stale = db.query(Approval).filter(
+        Approval.user_id == user_id,
+        Approval.status == Approval.ApprovalStatus.PENDING,
+        Approval.expires_at <= datetime.utcnow(),
+    ).all()
+
+    if not stale:
+        return 0
+
+    expired_ids: list[str] = []
+    for approval in stale:
+        approval.status = Approval.ApprovalStatus.EXPIRED
+        expired_ids.append(approval.id)
+
+    db.commit()
+
+    for approval_id in expired_ids:
+        try:
+            await broadcast_approval_event(
+                redis_client,
+                user_id,
+                "approvals:expired",
+                approval_id,
+                {"reason": "approval_ttl_elapsed"},
+                trace_id,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to broadcast approval expiry event",
+                extra={"trace_id": trace_id, "approval_id": approval_id, "user_id": user_id},
+            )
+
+    logger.info(
+        "Expired stale pending approvals",
+        extra={"trace_id": trace_id, "user_id": user_id, "expired_count": len(expired_ids)},
+    )
+    return len(expired_ids)
+
+
 
 async def get_current_user_from_db(
     current_token: TokenPayload = Depends(get_current_user),
@@ -180,6 +226,9 @@ async def list_pending_approvals(
     
     Returns approvals that are awaiting user decision.
     """
+    trace_id = str(uuid4())
+    await expire_stale_user_approvals(db=db, redis_client=get_redis(), user_id=current_user.id, trace_id=trace_id)
+
     approvals = db.query(Approval).filter(
         Approval.user_id == current_user.id,
         Approval.status == Approval.ApprovalStatus.PENDING,
@@ -213,6 +262,9 @@ async def get_approval(
     db: Session = Depends(get_db),
 ) -> dict:
     """Get full details of an approval request."""
+    trace_id = str(uuid4())
+    await expire_stale_user_approvals(db=db, redis_client=get_redis(), user_id=current_user.id, trace_id=trace_id)
+
     approval = db.query(Approval).filter(
         Approval.id == approval_id,
         Approval.user_id == current_user.id,
@@ -248,6 +300,9 @@ async def approve_action(
     
     After approval, the action tool can be executed.
     """
+    trace_id = str(uuid4())
+    await expire_stale_user_approvals(db=db, redis_client=get_redis(), user_id=current_user.id, trace_id=trace_id)
+
     approval = db.query(Approval).filter(
         Approval.id == approval_id,
         Approval.user_id == current_user.id,
@@ -299,6 +354,9 @@ async def reject_action(
     
     Prevents the action from being executed.
     """
+    trace_id = str(uuid4())
+    await expire_stale_user_approvals(db=db, redis_client=get_redis(), user_id=current_user.id, trace_id=trace_id)
+
     approval = db.query(Approval).filter(
         Approval.id == approval_id,
         Approval.user_id == current_user.id,
@@ -398,6 +456,8 @@ async def decide_approval(
     """
     # Extract trace ID
     trace_id = extract_trace_id({"x-trace-id": x_trace_id})
+
+    await expire_stale_user_approvals(db=db, redis_client=redis_client, user_id=current_user.id, trace_id=trace_id)
     
     # Check idempotency cache
     if x_idempotency_key:

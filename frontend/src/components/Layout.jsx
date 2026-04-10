@@ -18,10 +18,10 @@ function LayoutContent({ onLogout, onNavigate }) {
   const { modals, closeModal } = useModal()
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-background-DEFAULT text-text-primary">
+    <div className="relative h-screen w-full overflow-hidden bg-background-DEFAULT text-text-primary">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.18),_transparent_38%),radial-gradient(circle_at_bottom_right,_rgba(14,165,233,0.14),_transparent_45%)]"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_5%,_rgba(246,102,53,0.22),_transparent_34%),radial-gradient(circle_at_90%_85%,_rgba(54,181,206,0.16),_transparent_44%)]"
       />
 
       <a
@@ -37,16 +37,16 @@ function LayoutContent({ onLogout, onNavigate }) {
       {/* Main Content Region */}
       <main 
         id="main-content"
-        className="relative z-10 flex min-h-[calc(100vh-73px)] flex-col overflow-hidden"
+        className="relative z-10 flex h-[calc(100svh-73px)] min-h-0 flex-col overflow-hidden"
         role="main"
         aria-label="Dashboard"
       >
-        <div className="grid h-full flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 md:gap-5 md:p-6 lg:grid-cols-12">
-          <section className="lg:col-span-7">
+        <div className="grid h-full min-h-0 grid-cols-1 gap-4 px-4 py-4 md:gap-5 md:px-6 md:py-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(380px,0.82fr)]">
+          <section className="min-h-0">
             <ChatPanel />
           </section>
 
-          <section className="lg:col-span-5">
+          <section className="min-h-0">
             <WidgetsRegion />
           </section>
         </div>

@@ -2,6 +2,8 @@
 
 React and Vite client for the AI assistant dashboard, including chat, tasks, calendar views, and authentication flows.
 
+> Central documentation: see [../README.md](../README.md). This file focuses on frontend-specific details.
+
 ## Overview
 
 The frontend provides:
@@ -82,6 +84,14 @@ docker run -p 3000:80 ai-assistant-frontend:latest
 ```
 
 Ensure backend base URLs and CORS settings are aligned for the target environment.
+
+For the integrated stack from the workspace root:
+
+```bash
+docker compose up -d --build postgres redis backend frontend
+```
+
+Then open http://localhost:3000.
 
 ## Troubleshooting
 

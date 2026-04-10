@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import Layout from './components/Layout'
-import Login from './components/Login'
-import ProductivityPage from './components/ProductivityPage'
+import AppShell from './components/AppShell'
+import LandingPage from './pages/LandingPage'
 import { ASSISTANT_NAME } from './lib/branding'
+import { FeedbackProvider } from './lib/feedback.jsx'
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -76,14 +76,14 @@ export default function App() {
     )
   }
 
-  if (!isAuthenticated) {
-    return <Login onLoginSuccess={handleLoginSuccess} initialError={oauthError} />
-  }
-
-  if (route === '/productivity') {
-    return <ProductivityPage onBack={() => navigate('/')} />
-  }
-
-  return <Layout onLogout={handleLogout} onNavigate={navigate} />
+  return (
+    <FeedbackProvider>
+      {!isAuthenticated ? (
+        <LandingPage onLoginSuccess={handleLoginSuccess} initialError={oauthError} />
+      ) : (
+        <AppShell route={route} onLogout={handleLogout} onNavigate={navigate} />
+      )}
+    </FeedbackProvider>
+  )
 }
 

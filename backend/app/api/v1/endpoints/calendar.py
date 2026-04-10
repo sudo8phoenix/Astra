@@ -438,45 +438,59 @@ async def get_daily_schedule(
 
         # Convert Google events to internal format and store in DB
         calendar_event_repo = CalendarEventRepository(db)
+        parsed_google_events: list[dict] = []
+        sync_failed = False
         try:
             for google_event in google_events:
                 parsed_event = calendar_service.parse_google_event_to_dict(google_event)
+                parsed_google_events.append(parsed_event)
 
-                # Check if event already exists
-                existing = calendar_event_repo.get_by_google_event_id(
-                    parsed_event["google_event_id"]
-                )
+                try:
+                    # Check if event already exists
+                    existing = calendar_event_repo.get_by_google_event_id(
+                        parsed_event["google_event_id"]
+                    )
 
-                if not existing:
-                    # Create new event in DB
-                    calendar_event_repo.create(
-                        id=str(uuid.uuid4()),
-                        user_id=current_user.id,
-                        google_event_id=parsed_event["google_event_id"],
-                        title=parsed_event["title"],
-                        description=parsed_event["description"],
-                        start_time=parsed_event["start_time"],
-                        end_time=parsed_event["end_time"],
-                        all_day=parsed_event["all_day"],
-                        location=parsed_event["location"],
-                        attendees=parsed_event["attendees"],
-                        color_id=parsed_event["color_id"],
-                        reminders=parsed_event.get("reminders"),
-                        status=parsed_event["status"],
+                    if not existing:
+                        # Create new event in DB
+                        calendar_event_repo.create(
+                            id=str(uuid.uuid4()),
+                            user_id=current_user.id,
+                            google_event_id=parsed_event["google_event_id"],
+                            title=parsed_event["title"],
+                            description=parsed_event["description"],
+                            start_time=parsed_event["start_time"],
+                            end_time=parsed_event["end_time"],
+                            all_day=parsed_event["all_day"],
+                            location=parsed_event["location"],
+                            attendees=parsed_event["attendees"],
+                            color_id=parsed_event["color_id"],
+                            reminders=parsed_event.get("reminders"),
+                            status=parsed_event["status"],
+                        )
+                    else:
+                        calendar_event_repo.update(
+                            existing.id,
+                            title=parsed_event["title"],
+                            description=parsed_event["description"],
+                            start_time=parsed_event["start_time"],
+                            end_time=parsed_event["end_time"],
+                            location=parsed_event["location"],
+                            attendees=parsed_event["attendees"],
+                            color_id=parsed_event["color_id"],
+                            reminders=parsed_event.get("reminders"),
+                            status=parsed_event["status"],
+                        )
+                except Exception as event_sync_error:
+                    db.rollback()
+                    sync_failed = True
+                    logger.warning(
+                        "calendar.daily_schedule.event_sync_skipped user=%s google_event_id=%s error=%s",
+                        current_user.id,
+                        parsed_event.get("google_event_id"),
+                        str(event_sync_error),
                     )
-                else:
-                    calendar_event_repo.update(
-                        existing.id,
-                        title=parsed_event["title"],
-                        description=parsed_event["description"],
-                        start_time=parsed_event["start_time"],
-                        end_time=parsed_event["end_time"],
-                        location=parsed_event["location"],
-                        attendees=parsed_event["attendees"],
-                        color_id=parsed_event["color_id"],
-                        reminders=parsed_event.get("reminders"),
-                        status=parsed_event["status"],
-                    )
+                    continue
 
             db.commit()
 
@@ -490,6 +504,14 @@ async def get_daily_schedule(
                 _db_event_to_calendar_event_schema(event, payload.timezone)
                 for event in db_events
             ]
+
+            # Prefer direct Google payload conversion when DB sync is partial,
+            # so the UI receives complete event coverage for the selected day.
+            if sync_failed or len(events_schema) < len(parsed_google_events):
+                events_schema = [
+                    _to_calendar_event_schema(parsed_event, current_user.id, payload.timezone)
+                    for parsed_event in parsed_google_events
+                ]
         except Exception as db_error:
             db.rollback()
             if not _is_missing_table_error(db_error):
