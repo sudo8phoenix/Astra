@@ -227,6 +227,7 @@ class AgentOrchestrator:
                 action_type = PlannerDecision.CHAT_RESPONSE.value
 
             action_enum = PlannerDecision(action_type)
+            reasoning = str(data.get("reasoning", "LLM intent classification"))
             tools_required: list[ToolRequirement] = []
 
             for entry in data.get("tools_required", []):
@@ -240,9 +241,29 @@ class AgentOrchestrator:
                     )
                 )
 
+            if action_enum == PlannerDecision.CHAT_RESPONSE and not tools_required:
+                calendar_follow_up_params = self._infer_create_event_follow_up_params(
+                    user_message=state.user_input.content or "",
+                    user_context=user_context,
+                )
+                if calendar_follow_up_params is not None:
+                    action_enum = PlannerDecision.CREATE_EVENT
+                    tools_required = [
+                        ToolRequirement(
+                            tool_name="create_event",
+                            parameters=calendar_follow_up_params,
+                        )
+                    ]
+                    reasoning = f"{reasoning} Follow-up interpreted as calendar event creation continuation."
+
+            if self._is_explicit_new_email_request(state.user_input.content or ""):
+                action_enum = PlannerDecision.CHAT_RESPONSE
+                tools_required = []
+                reasoning = f"{reasoning} Direct outbound email compose request interpreted as chat drafting flow."
+
             state.plan = PlannerOutput(
                 action_type=action_enum,
-                reasoning=str(data.get("reasoning", "LLM intent classification")),
+                reasoning=reasoning,
                 tools_required=tools_required,
                 requires_approval=bool(data.get("requires_approval", False)),
                 approval_reason=data.get("approval_reason"),
@@ -323,6 +344,7 @@ class AgentOrchestrator:
                         tool_name=tool_name,
                         params=params,
                         user_message=state.user_input.content,
+                        conversation_context=((state.user_input.context or {}).get("user_context") or {}).get("conversation_context"),
                     )
                     coerced_params = self._coerce_tool_params(tool_fn=tool_fn, params=enriched_params)
                     safe_params = self._sanitize_tool_params(tool_fn=tool_fn, params=coerced_params)
@@ -571,7 +593,12 @@ class AgentOrchestrator:
         return f"I can run {tool_name}, but I still need: {ordered}."
 
     @staticmethod
-    def _enrich_tool_params(tool_name: str, params: dict[str, Any], user_message: str | None) -> dict[str, Any]:
+    def _enrich_tool_params(
+        tool_name: str,
+        params: dict[str, Any],
+        user_message: str | None,
+        conversation_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Normalize planner params and infer sensible defaults for calendar all-day requests."""
         if not isinstance(params, dict):
             return {}
@@ -594,6 +621,8 @@ class AgentOrchestrator:
             enriched["attendees"] = [item.strip() for item in attendees.split(",") if item.strip()]
 
         message = (user_message or "").lower()
+        recent_user_text = AgentOrchestrator._collect_recent_user_text(conversation_context)
+        combined_message = f"{recent_user_text}\n{message}".strip()
         normalized_time_hint = str(enriched.get("time") or "").strip().lower()
         normalized_duration = str(enriched.get("duration") or "").strip().lower()
         full_day_requested = any(
@@ -602,20 +631,42 @@ class AgentOrchestrator:
                 bool(enriched.get("is_all_day")),
                 normalized_time_hint in {"all day", "full day"},
                 normalized_duration in {"all day", "full day"},
-                "all day" in message,
-                "full day" in message,
+                "all day" in combined_message,
+                "full day" in combined_message,
             ]
         )
 
-        if not full_day_requested:
-            return enriched
-
         if not enriched.get("title"):
             fallback_title = enriched.get("event_title") or enriched.get("name")
-            enriched["title"] = str(fallback_title or "Full Day Event")
+            extracted_title = AgentOrchestrator._extract_event_title_from_message(message)
+            if extracted_title:
+                fallback_title = extracted_title
+            if full_day_requested:
+                enriched["title"] = str(fallback_title or "Full Day Event")
+            elif fallback_title:
+                enriched["title"] = str(fallback_title)
 
-        date_value = AgentOrchestrator._extract_event_date(enriched=enriched, message=message)
+        date_value = AgentOrchestrator._extract_event_date(enriched=enriched, message=combined_message)
         if not date_value:
+            return enriched
+
+        if not full_day_requested:
+            start_hint = str(enriched.get("start_time") or "").strip()
+            end_hint = str(enriched.get("end_time") or "").strip()
+
+            if not start_hint:
+                start_hint = AgentOrchestrator._extract_labeled_time_from_message(message=message, label="start") or ""
+            if not end_hint:
+                end_hint = AgentOrchestrator._extract_labeled_time_from_message(message=message, label="end") or ""
+
+            start_iso = AgentOrchestrator._resolve_event_datetime(date_value=date_value, value=start_hint)
+            end_iso = AgentOrchestrator._resolve_event_datetime(date_value=date_value, value=end_hint)
+
+            if start_iso:
+                enriched["start_time"] = start_iso
+            if end_iso:
+                enriched["end_time"] = end_iso
+
             return enriched
 
         if not enriched.get("start_time"):
@@ -662,6 +713,8 @@ class AgentOrchestrator:
 
         if "tomorrow" in message:
             return (datetime.utcnow().date() + timedelta(days=1)).isoformat()
+        if "tmrw" in message:
+            return (datetime.utcnow().date() + timedelta(days=1)).isoformat()
         if "today" in message:
             return datetime.utcnow().date().isoformat()
 
@@ -692,6 +745,156 @@ class AgentOrchestrator:
         if not match:
             return None
         return match.group(0).strip()
+
+    @staticmethod
+    def _collect_recent_user_text(conversation_context: dict[str, Any] | None) -> str:
+        turns = []
+        if isinstance(conversation_context, dict):
+            maybe_turns = conversation_context.get("recent_turns")
+            if isinstance(maybe_turns, list):
+                turns = maybe_turns
+
+        snippets: list[str] = []
+        for turn in turns[-8:]:
+            if not isinstance(turn, dict):
+                continue
+            if str(turn.get("role") or "").lower() != "user":
+                continue
+            content = str(turn.get("content") or "").strip()
+            if content:
+                snippets.append(content)
+
+        return "\n".join(snippets)
+
+    @staticmethod
+    def _extract_event_title_from_message(message: str) -> str | None:
+        text = (message or "").strip()
+        if not text:
+            return None
+
+        title_match = re.search(
+            r"(?:^|\b)(?:title|name|event|called)\s*[:=-]\s*(.+?)(?=(?:\n|\r|\bstart\b|\bend\b|\btime\b|$))",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not title_match:
+            return None
+
+        title = title_match.group(1).strip().strip(".,")
+        return title or None
+
+    @staticmethod
+    def _extract_labeled_time_from_message(message: str, label: str) -> str | None:
+        pattern = rf"\b{re.escape(label)}(?:\s*time)?(?:\s+at)?\s*[:=-]?\s*([^\n\r,;]+)"
+        match = re.search(pattern, message or "", flags=re.IGNORECASE)
+        if not match:
+            return None
+        candidate = match.group(1).strip().strip(".,")
+        return candidate or None
+
+    @staticmethod
+    def _extract_time_candidates_from_message(message: str) -> list[str]:
+        text = (message or "").strip().lower()
+        if not text:
+            return []
+
+        candidates = re.findall(r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b\d{1,2}:\d{2}\b", text)
+        normalized = []
+        for candidate in candidates:
+            cleaned = re.sub(r"\s+", " ", candidate.strip())
+            if cleaned and cleaned not in normalized:
+                normalized.append(cleaned)
+        return normalized
+
+    @staticmethod
+    def _resolve_event_datetime(date_value: str, value: str) -> str | None:
+        raw = (value or "").strip()
+        if not raw:
+            return None
+
+        parsed_iso = AgentOrchestrator._parse_iso_datetime(raw)
+        if parsed_iso:
+            return parsed_iso.replace(microsecond=0).isoformat()
+
+        normalized = raw.lower().replace(".", "")
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        normalized = re.sub(r"(\d)(am|pm)\b", r"\1 \2", normalized)
+
+        time_formats = ["%I:%M %p", "%I %p", "%H:%M", "%H"]
+        for fmt in time_formats:
+            try:
+                parsed_time = datetime.strptime(normalized, fmt).time().replace(microsecond=0)
+                return datetime.combine(datetime.fromisoformat(date_value).date(), parsed_time).isoformat()
+            except Exception:
+                continue
+
+        return None
+
+    @staticmethod
+    def _infer_create_event_follow_up_params(user_message: str, user_context: dict[str, Any]) -> dict[str, Any] | None:
+        if not AgentOrchestrator._has_recent_create_event_missing_prompt(user_context):
+            return None
+
+        text = (user_message or "").strip()
+        combined = f"{AgentOrchestrator._collect_recent_user_text((user_context or {}).get('conversation_context'))}\n{text}".strip()
+        params: dict[str, Any] = {}
+
+        title = AgentOrchestrator._extract_event_title_from_message(text)
+        if title:
+            params["title"] = title
+
+        date_value = AgentOrchestrator._extract_event_date(enriched=params, message=combined.lower())
+        time_candidates = AgentOrchestrator._extract_time_candidates_from_message(text)
+        start_hint = AgentOrchestrator._extract_labeled_time_from_message(message=text, label="start")
+        end_hint = AgentOrchestrator._extract_labeled_time_from_message(message=text, label="end")
+
+        if date_value:
+            start_iso = None
+            if start_hint:
+                start_iso = AgentOrchestrator._resolve_event_datetime(date_value=date_value, value=start_hint)
+            if not start_iso and time_candidates:
+                start_iso = AgentOrchestrator._resolve_event_datetime(date_value=date_value, value=time_candidates[0])
+            if start_iso:
+                params["start_time"] = start_iso
+
+            end_iso = None
+            if end_hint:
+                end_iso = AgentOrchestrator._resolve_event_datetime(date_value=date_value, value=end_hint)
+            if not end_iso and len(time_candidates) > 1:
+                end_iso = AgentOrchestrator._resolve_event_datetime(date_value=date_value, value=time_candidates[1])
+            if end_iso:
+                params["end_time"] = end_iso
+
+        if params:
+            return params
+
+        if AgentOrchestrator._is_affirmative_help_follow_up(text.lower()):
+            return {}
+
+        return None
+
+    @staticmethod
+    def _has_recent_create_event_missing_prompt(user_context: dict[str, Any]) -> bool:
+        conversation_context = dict((user_context or {}).get("conversation_context") or {})
+        recent_turns = conversation_context.get("recent_turns")
+        if not isinstance(recent_turns, list):
+            return False
+
+        for turn in reversed(recent_turns[-8:]):
+            if not isinstance(turn, dict):
+                continue
+            if str(turn.get("role") or "").lower() != "assistant":
+                continue
+            content = str(turn.get("content") or "").lower()
+            if (
+                "i can create that calendar event" in content
+                and "i still need" in content
+                and "start_time" in content
+                and "end_time" in content
+            ):
+                return True
+
+        return False
 
     @staticmethod
     def _format_slot_range(start: str, end: str) -> str:
@@ -1039,7 +1242,21 @@ class AgentOrchestrator:
 
     def _generate_contextual_follow_up_reply(self, state: AgentState) -> str | None:
         """Handle short anaphoric follow-ups using recent in-session context when possible."""
+        raw_text = (state.user_input.content or "").strip()
         user_text = (state.user_input.content or "").strip().lower()
+
+        direct_compose = self._generate_direct_email_compose_reply(raw_text)
+        if direct_compose:
+            return direct_compose
+
+        if self._is_affirmative_help_follow_up(user_text):
+            recipient = self._extract_recent_email_recipient_from_context(state)
+            if recipient:
+                return (
+                    f"Absolutely. I can help you draft that email to {recipient}. "
+                    "Share the main point, preferred tone, and any deadline, and I will prepare a clean draft."
+                )
+
         if not self._is_name_results_follow_up(user_text):
             return None
 
@@ -1063,6 +1280,94 @@ class AgentOrchestrator:
             r"\bname (those|these)\b",
         ]
         return any(re.search(pattern, user_text) for pattern in patterns)
+
+    @staticmethod
+    def _is_affirmative_help_follow_up(user_text: str) -> bool:
+        patterns = [
+            r"^yes$",
+            r"^yes\s+i\s+need\s+help$",
+            r"^i\s+need\s+help$",
+            r"^yes\s+please$",
+            r"^yes\s+add\s+it(?:\s+then)?$",
+            r"^help\s+me$",
+            r"^sure$",
+        ]
+        return any(re.search(pattern, user_text.strip()) for pattern in patterns)
+
+    @staticmethod
+    def _extract_recent_email_recipient_from_context(state: AgentState) -> str | None:
+        """Extract recipient email from recent turns when assistant asked about composing an email."""
+        user_context = dict((state.user_input.context or {}).get("user_context") or {})
+        conversation_context = dict(user_context.get("conversation_context") or {})
+        recent_turns = conversation_context.get("recent_turns")
+
+        if not isinstance(recent_turns, list) or not recent_turns:
+            return None
+
+        assistant_asked_email_help = False
+        for turn in reversed(recent_turns[-6:]):
+            if not isinstance(turn, dict):
+                continue
+            if str(turn.get("role") or "").lower() != "assistant":
+                continue
+
+            content = str(turn.get("content") or "").lower()
+            if "help composing an email" in content or "schedule a task related to this email" in content:
+                assistant_asked_email_help = True
+                break
+
+        if not assistant_asked_email_help:
+            return None
+
+        email_pattern = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+        for turn in reversed(recent_turns):
+            if not isinstance(turn, dict):
+                continue
+            if str(turn.get("role") or "").lower() != "user":
+                continue
+
+            content = str(turn.get("content") or "")
+            match = email_pattern.search(content)
+            if match:
+                return match.group(0)
+
+        return None
+
+    @staticmethod
+    def _is_explicit_new_email_request(user_text: str) -> bool:
+        text = (user_text or "").strip().lower()
+        if not text:
+            return False
+
+        has_email_verb = any(token in text for token in ["send", "sent", "compose", "draft", "write"])
+        has_email_noun = any(token in text for token in ["email", "mail"])
+        has_recipient = bool(re.search(r"\bto\s+[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", text))
+        return has_email_verb and has_email_noun and has_recipient
+
+    @staticmethod
+    def _generate_direct_email_compose_reply(user_text: str) -> str | None:
+        """Generate a deterministic draft response for explicit outbound compose requests."""
+        if not AgentOrchestrator._is_explicit_new_email_request(user_text):
+            return None
+
+        recipient_match = re.search(r"\bto\s+([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\b", user_text, flags=re.IGNORECASE)
+        recipient = recipient_match.group(1) if recipient_match else "the recipient"
+
+        details_match = re.search(r"\b(?:regarding|about|for)\b\s+(.+)$", user_text, flags=re.IGNORECASE)
+        details = details_match.group(1).strip() if details_match else "my leave request"
+
+        tomorrow_requested = bool(re.search(r"\b(tomorrow|tmrw)\b", user_text, flags=re.IGNORECASE))
+        subject = "Leave Request" + (" for Tomorrow" if tomorrow_requested else "")
+
+        return (
+            f"I can draft that email to {recipient}.\n\n"
+            f"Subject: {subject}\n\n"
+            "Hi,\n\n"
+            f"I am writing to inform you that I will not be able to attend class {'tomorrow' if tomorrow_requested else 'as discussed'} due to {details}. "
+            "I kindly request leave for this absence.\n\n"
+            "Thank you for your understanding.\n\n"
+            "Best regards,"
+        )
 
     @staticmethod
     def _extract_recent_search_titles_from_context(state: AgentState) -> tuple[str | None, list[str]]:

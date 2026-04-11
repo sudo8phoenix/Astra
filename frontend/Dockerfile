@@ -1,9 +1,12 @@
 # Dockerfile for Frontend (React + Vite)
 
+ARG NODE_VERSION=22
+ARG NGINX_VERSION=1.28-alpine
+
 # =========================================================================
 # STAGE 1: BUILD - Build the application
 # =========================================================================
-FROM node:18-alpine as builder
+FROM node:${NODE_VERSION}-alpine as builder
 
 WORKDIR /app
 
@@ -20,7 +23,7 @@ RUN npm run build
 # =========================================================================
 # STAGE 2: RUNTIME - Serve with nginx
 # =========================================================================
-FROM nginx:alpine
+FROM nginx:${NGINX_VERSION}
 
 # Copy nginx config
 COPY nginx.conf /etc/nginx/nginx.conf

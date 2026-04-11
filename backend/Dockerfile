@@ -1,9 +1,14 @@
 # Multi-stage Dockerfile for AI Assistant Backend
 
+ARG PYTHON_VERSION=3.12
+ARG PYTHON_MAJOR_MINOR=3.12
+
 # =========================================================================
 # STAGE 1: BUILDER - Install dependencies
 # =========================================================================
-FROM python:3.11-slim as builder
+FROM python:${PYTHON_VERSION}-slim-bookworm as builder
+
+ARG PYTHON_MAJOR_MINOR
 
 WORKDIR /app
 
@@ -23,7 +28,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # =========================================================================
 # STAGE 2: RUNTIME - Lightweight production image
 # =========================================================================
-FROM python:3.11-slim
+FROM python:${PYTHON_VERSION}-slim-bookworm
+
+ARG PYTHON_MAJOR_MINOR
 
 WORKDIR /app
 
@@ -34,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python packages and binaries from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/lib/python${PYTHON_MAJOR_MINOR}/site-packages /usr/local/lib/python${PYTHON_MAJOR_MINOR}/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 ENV PYTHONUNBUFFERED=1 \
