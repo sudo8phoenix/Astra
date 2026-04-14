@@ -45,6 +45,21 @@ export default function ChatBubble({ message }) {
         const messageId = executionResult?.message_id
         const eventTitle = executionResult?.title
         const eventLink = executionResult?.google_event_link
+        const actionType = executionResult?.action_type
+
+        if (actionType === 'create_event') {
+          window.dispatchEvent(
+            new CustomEvent('assistant:data-updated', {
+              detail: { tools: ['create_event'] },
+            }),
+          )
+        } else if (actionType === 'send_email') {
+          window.dispatchEvent(
+            new CustomEvent('assistant:data-updated', {
+              detail: { tools: ['send_new_email'] },
+            }),
+          )
+        }
 
         if (eventTitle && eventLink) {
           setActionResult(`✓ Approved and created event '${eventTitle}' (${eventLink})`)

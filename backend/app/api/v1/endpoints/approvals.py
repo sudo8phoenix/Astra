@@ -226,12 +226,33 @@ async def execute_approved_action(
         preferences = dict(user.preferences or {})
         tokens = dict(preferences.get("calendar_oauth_tokens") or {})
         access_token = tokens.get("access_token")
+        refresh_token = tokens.get("refresh_token")
         expires_at = _parse_payload_datetime(tokens.get("expires_at"))
+
         if not access_token or (expires_at and expires_at <= datetime.utcnow()):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Calendar not connected or token expired. Reconnect Google Calendar and try again.",
-            )
+            if not refresh_token:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Calendar not connected or token expired. Reconnect Google Calendar and try again.",
+                )
+            try:
+                refreshed = await GoogleCalendarService().refresh_access_token(refresh_token)
+                access_token = refreshed.get("access_token")
+                if not access_token:
+                    raise ValueError("Missing access_token in refresh response")
+                tokens["access_token"] = access_token
+                tokens["expires_at"] = (
+                    datetime.utcnow() + timedelta(seconds=int(refreshed.get("expires_in", 3600)))
+                ).isoformat()
+                preferences["calendar_oauth_tokens"] = tokens
+                preferences["calendar_connected"] = True
+                user.preferences = preferences
+                db.add(user)
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Calendar session expired. Reconnect Google Calendar and try again.",
+                )
 
         calendar_service = GoogleCalendarService()
         google_event = await calendar_service.create_event(
